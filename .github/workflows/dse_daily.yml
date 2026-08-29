@@ -4,9 +4,11 @@ on:
   workflow_dispatch:
 
   schedule:
-    # 14:35 Bangladesh time = 08:35 UTC
+    # 14:30 Bangladesh time (UTC+6)
+    # = 08:30 UTC
+    #
     # Sunday-Thursday
-    - cron: "35 8 * * 0-4"
+    - cron: "30 8 * * 0-4"
 
 permissions:
   contents: write
@@ -28,7 +30,7 @@ jobs:
 
 
       # =====================================================
-      # 2. PYTHON
+      # 2. SETUP PYTHON
       # =====================================================
 
       - name: Set up Python
@@ -90,7 +92,7 @@ jobs:
 
 
           # -------------------------------------------------
-          # Add ONLY daily data.
+          # Add only daily DSE data.
           #
           # dse_data_feeder.log remains ignored.
           # -------------------------------------------------
@@ -99,7 +101,7 @@ jobs:
 
 
           # -------------------------------------------------
-          # Check whether anything changed.
+          # Commit only when data changed.
           # -------------------------------------------------
 
           if git diff --cached --quiet; then
