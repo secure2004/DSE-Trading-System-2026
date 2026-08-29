@@ -1868,413 +1868,799 @@ def write_combined_csv(
     return True
 
 
-# =====================================================
-# 5. APPENDING DSEX
-# =====================================================
-
-print()
-print("=" * 70)
-print("5. APPENDING DSEX")
-print("=" * 70)
-
-try:
-
-    # -------------------------------------------------
-    # 5.1 BANGLADESH TIME
-    # -------------------------------------------------
-
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-
-    bd_now = datetime.now(
-        ZoneInfo("Asia/Dhaka")
-    )
-
-    print()
-    print("Bangladesh Time:")
-    print(
-        bd_now.strftime(
-            "%Y-%m-%d %I:%M:%S %p"
-        )
-    )
-
-    print("Timezone: Asia/Dhaka")
+# =========================================================
+# PART 5: APPEND DSEX
+#
+# DSEX OPEN   -> TradingView
+# DSEX HIGH   -> TradingView
+# DSEX LOW    -> TradingView
+# DSEX CLOSE  -> DSE Website
+# DSEX VOLUME -> DSE Website
+# DSEX DATE   -> DSE Website "Last update on"
+#
+# DSE WEBSITE STRUCTURE:
+#
+# DSE X Index 5655.68313 15.59485 0.2765%
+# DSE X Index 5640.08828 -3.48147 -0.06169%
+#
+# The first DSE X Index row is the current/live value.
+# The second DSE X Index row is the closing value.
+#
+# Total Volume:
+#
+# First volume row  = current/live
+# Second volume row = closing/final
+#
+# Therefore:
+#
+# DSEX CLOSE  = second DSE X Index value
+# DSEX VOLUME = second Total Volume value
+#
+# =========================================================
 
 
-    # -------------------------------------------------
-    # 5.2 TRADINGVIEW DSEX OHLC
-    # -------------------------------------------------
-    #
-    # These variables should already be collected
-    # earlier by your TradingView section.
-    #
-    # Required:
-    #   tv_dsex_open
-    #   tv_dsex_high
-    #   tv_dsex_low
-    #
-    # If your existing code uses different variable
-    # names, keep those existing names here.
-    # -------------------------------------------------
+def append_dsex_index():
 
     print()
-    print("TradingView DSEX OHLC:")
-
-    print(
-        "Open :",
-        tv_dsex_open
-    )
-
-    print(
-        "High :",
-        tv_dsex_high
-    )
-
-    print(
-        "Low  :",
-        tv_dsex_low
-    )
+    print("=" * 70)
+    print("5. APPENDING DSEX")
+    print("=" * 70)
 
 
-    # -------------------------------------------------
-    # 5.3 DOWNLOAD OFFICIAL DSE INDEX PAGE
-    # -------------------------------------------------
+    # =====================================================
+    # 1. GET DSEX OPEN / HIGH / LOW FROM TRADINGVIEW
+    # =====================================================
 
-    DSE_INDEX_URL = (
-        "https://www.dsebd.org/index.php"
-    )
+    try:
 
-    session = requests.Session()
-
-    response = session.get(
-        DSE_INDEX_URL,
-        headers=DSE_HEADERS,
-        timeout=30,
-        verify=False
-    )
-
-    response.raise_for_status()
-
-    html = response.text
-
-    print()
-    print(
-        "DSE URL:",
-        DSE_INDEX_URL
-    )
-
-    print(
-        "DSE Final URL:",
-        response.url
-    )
-
-    print(
-        "DSE HTTP Status:",
-        response.status_code
-    )
-
-    print(
-        "DSE Response Size:",
-        len(response.content),
-        "bytes"
-    )
-
-
-    # -------------------------------------------------
-    # 5.4 VERIFY OFFICIAL DSE DATE
-    # -------------------------------------------------
-
-    print()
-
-    dse_official_date = official_trading_date
-
-    print(
-        "DSE Official Date:",
-        dse_official_date
-    )
-
-
-    # -------------------------------------------------
-    # 5.5 PARSE DSE HTML
-    # -------------------------------------------------
-
-    soup = BeautifulSoup(
-        html,
-        "html.parser"
-    )
-
-
-    # -------------------------------------------------
-    # 5.6 FIND DSE MIDROW SECTIONS
-    # -------------------------------------------------
-
-    midrow_sections = []
-
-    for element in soup.find_all(
-        string=True
-    ):
-
-        text = " ".join(
-            element.strip().split()
+        handler = TA_Handler(
+            symbol="DSEX",
+            exchange="DSEBD",
+            screener="bangladesh",
+            interval=Interval.INTERVAL_1_DAY
         )
 
-        if text:
-            midrow_sections.append(text)
+        analysis = handler.get_analysis()
 
+        ind = analysis.indicators
 
-    print()
-    print(
-        "DSE Midrow Sections Found:",
-        len(midrow_sections)
-    )
-
-
-    # -------------------------------------------------
-    # 5.7 FIND OFFICIAL DSEX
-    # -------------------------------------------------
-    #
-    # IMPORTANT:
-    #
-    # The DSE page contains:
-    #
-    # DSE X Index 5655.68313 15.59485 0.2765%
-    #
-    # This is the CURRENT / OFFICIAL DSEX value.
-    #
-    # Do NOT use the later historical/secondary
-    # DSE X Index row.
-    # -------------------------------------------------
-
-    dsex_close = None
-
-    for text in midrow_sections:
-
-        normalized = (
-            text
-            .replace("\xa0", " ")
-            .strip()
+        tv_open = round(
+            float(ind.get("open", 0)),
+            2
         )
 
-        if normalized.startswith(
-            "DSE X Index "
-        ):
+        tv_high = round(
+            float(ind.get("high", 0)),
+            2
+        )
 
-            parts = normalized.split()
-
-            # Expected:
-            #
-            # parts[0] = DSE
-            # parts[1] = X
-            # parts[2] = 5655.68313
-            # parts[3] = 15.59485
-            # parts[4] = 0.2765%
-
-            if len(parts) >= 3:
-
-                candidate = parts[2]
-
-                try:
-
-                    dsex_close = float(
-                        candidate
-                    )
-
-                    print()
-                    print(
-                        "Official DSEX row found:"
-                    )
-
-                    print(
-                        "DSE X Index:",
-                        normalized
-                    )
-
-                    print(
-                        "DSEX Close:",
-                        dsex_close
-                    )
-
-                    break
-
-                except (
-                    ValueError,
-                    TypeError
-                ):
-
-                    continue
-
-
-    # -------------------------------------------------
-    # 5.8 VALIDATE DSEX CLOSE
-    # -------------------------------------------------
-
-    if dsex_close is None:
-
-        raise RuntimeError(
-            "DSE DSEX CLOSE NOT FOUND"
+        tv_low = round(
+            float(ind.get("low", 0)),
+            2
         )
 
 
-    if dsex_close <= 0:
+        print()
+        print("TradingView DSEX OHLC:")
 
-        raise RuntimeError(
-            f"Invalid DSEX Close: "
-            f"{dsex_close}"
+        print(
+            "Open :",
+            tv_open
+        )
+
+        print(
+            "High :",
+            tv_high
+        )
+
+        print(
+            "Low  :",
+            tv_low
         )
 
 
-    # -------------------------------------------------
-    # 5.9 FIND OFFICIAL DSE TOTAL VOLUME
-    # -------------------------------------------------
-    #
-    # The first Total Trade section in the page is
-    # the current official market session:
-    #
-    # Total Trade
-    # Total Volume
-    # Total Value in Taka (mn)
-    #
-    # 147461
-    # 177465534
-    # 4670.148
-    #
-    # Therefore:
-    #
-    # Total Volume = 177465534
-    # -------------------------------------------------
-
-    dse_total_volume = None
-
-    for i, text in enumerate(
-        midrow_sections
-    ):
-
-        normalized = (
-            text
-            .replace("\xa0", " ")
-            .strip()
-        )
+        # -------------------------------------------------
+        # VALIDATE TRADINGVIEW DATA
+        # -------------------------------------------------
 
         if (
-            "Total Trade" in normalized
-            and
-            "Total Volume" in normalized
+            tv_open <= 0
+            or
+            tv_high <= 0
+            or
+            tv_low <= 0
         ):
 
-            # Look forward for the numeric
-            # values belonging to this section.
+            logging.error(
+                "Invalid TradingView DSEX OHLC"
+            )
 
-            for j in range(
-                i + 1,
-                min(
-                    i + 5,
-                    len(midrow_sections)
-                )
+            print()
+            print(
+                "ERROR: INVALID TRADINGVIEW DSEX OHLC"
+            )
+
+            return False
+
+
+    except Exception as e:
+
+        logging.error(
+            f"TradingView DSEX fetch failed: {e}"
+        )
+
+        print()
+        print(
+            "TRADINGVIEW DSEX ERROR:",
+            e
+        )
+
+        return False
+
+
+    # =====================================================
+    # 2. GET DSEX DATE + CLOSE + VOLUME FROM DSE
+    # =====================================================
+
+    try:
+
+        DSE_INDEX_URL = (
+            "https://www.dsebd.org/index.php"
+        )
+
+
+        session = requests.Session()
+
+
+        response = session.get(
+            DSE_INDEX_URL,
+            headers=DSE_HEADERS,
+            timeout=30,
+            verify=False
+        )
+
+
+        response.raise_for_status()
+
+
+        html = response.text
+
+
+        print()
+        print(
+            "DSE URL:",
+            DSE_INDEX_URL
+        )
+
+        print(
+            "DSE Final URL:",
+            response.url
+        )
+
+        print(
+            "DSE HTTP Status:",
+            response.status_code
+        )
+
+        print(
+            "DSE Response Size:",
+            len(response.content),
+            "bytes"
+        )
+
+
+        # =================================================
+        # BEAUTIFULSOUP
+        # =================================================
+
+        soup = BeautifulSoup(
+            html,
+            "html.parser"
+        )
+
+
+        # =================================================
+        # 2A. GET OFFICIAL DSE DATE
+        #
+        # Example:
+        #
+        # Last update on Aug 27, 2026 at 2:40 PM
+        #
+        # =================================================
+
+        date_match = re.search(
+
+            r"Last\s+update\s+on\s+"
+            r"([A-Za-z]+)\s+"
+            r"(\d{1,2}),\s+"
+            r"(\d{4})",
+
+            html,
+
+            re.IGNORECASE
+        )
+
+
+        if date_match is None:
+
+            logging.error(
+                "DSE Last update date not found"
+            )
+
+            print()
+            print(
+                "ERROR: DSE LAST UPDATE DATE NOT FOUND"
+            )
+
+            return False
+
+
+        month_name = date_match.group(1)
+
+        day_number = date_match.group(2)
+
+        year_number = date_match.group(3)
+
+
+        # -------------------------------------------------
+        # Convert date
+        # -------------------------------------------------
+
+        try:
+
+            dse_date = datetime.strptime(
+
+                f"{month_name} "
+                f"{day_number} "
+                f"{year_number}",
+
+                "%B %d %Y"
+
+            ).strftime(
+                DATE_FMT
+            )
+
+        except ValueError:
+
+            dse_date = datetime.strptime(
+
+                f"{month_name} "
+                f"{day_number} "
+                f"{year_number}",
+
+                "%b %d %Y"
+
+            ).strftime(
+                DATE_FMT
+            )
+
+
+        print()
+        print(
+            "DSE Official Date:",
+            dse_date
+        )
+
+
+        # =================================================
+        # 2B. FIND DSE MIDROW SECTIONS
+        # =================================================
+        #
+        # We specifically use the DSE website's displayed
+        # market summary.
+        #
+        # Example from the actual successful run:
+        #
+        # DSE Midrow 1:
+        # DSE X Index 5655.68313 15.59485 0.2765%
+        #
+        # DSE Midrow 8:
+        # DSE X Index 5640.08828 -3.48147 -0.06169%
+        #
+        # The second DSE X Index row is the final close.
+        #
+        # =================================================
+
+        midrows = soup.find_all(
+            "div",
+            class_="midrow"
+        )
+
+
+        print()
+        print(
+            "DSE Midrow Sections Found:",
+            len(midrows)
+        )
+
+
+        dsex_values = []
+
+
+        # -------------------------------------------------
+        # Extract DSE X Index values
+        # -------------------------------------------------
+
+        for index, midrow in enumerate(
+            midrows,
+            start=1
+        ):
+
+            text = midrow.get_text(
+                " ",
+                strip=True
+            )
+
+
+            text = " ".join(
+                text.split()
+            )
+
+
+            if re.search(
+                r"DSE\s+X\s+Index",
+                text,
+                re.IGNORECASE
             ):
 
-                value_text = (
-                    midrow_sections[j]
-                    .replace("\xa0", " ")
-                    .strip()
+                print(
+                    f"DSE Midrow {index}:",
+                    text
                 )
 
-                parts = value_text.split()
 
-                # Expected:
-                #
-                # 147461
-                # 177465534
-                # 4670.148
+                # -------------------------------------------------
+                # Extract first decimal number after DSE X Index
+                # -------------------------------------------------
 
-                if len(parts) >= 3:
+                match = re.search(
+
+                    r"DSE\s+X\s+Index\s+"
+                    r"([0-9][0-9,]*\.[0-9]+)",
+
+                    text,
+
+                    re.IGNORECASE
+                )
+
+
+                if match:
+
+                    value_text = match.group(1)
+
+
+                    candidate = safe_float(
+                        value_text
+                    )
+
+
+                    if (
+                        candidate > 1000
+                        and
+                        candidate < 20000
+                    ):
+
+                        dsex_values.append(
+                            candidate
+                        )
+
+
+        # =================================================
+        # 2C. DSEX CLOSE
+        # =================================================
+        #
+        # If two DSE X Index values are available:
+        #
+        # [live/current, closing]
+        #
+        # use the SECOND value.
+        #
+        # If only one exists, use that value.
+        #
+        # =================================================
+
+        dse_close = 0.0
+
+
+        if len(dsex_values) >= 2:
+
+            dse_close = dsex_values[-1]
+
+        elif len(dsex_values) == 1:
+
+            dse_close = dsex_values[0]
+
+
+        # =================================================
+        # FALLBACK: RAW HTML
+        # =================================================
+
+        if dse_close <= 0:
+
+            try:
+
+                dsex_matches = re.findall(
+
+                    r"DSE\s+X\s+Index"
+                    r".{0,500}?"
+                    r"([0-9][0-9,]*\.[0-9]+)",
+
+                    html,
+
+                    re.IGNORECASE
+                )
+
+
+                fallback_values = []
+
+
+                for value_text in dsex_matches:
+
+                    candidate = safe_float(
+                        value_text
+                    )
+
+
+                    if (
+                        candidate > 1000
+                        and
+                        candidate < 20000
+                    ):
+
+                        fallback_values.append(
+                            candidate
+                        )
+
+
+                if len(fallback_values) >= 2:
+
+                    dse_close = fallback_values[-1]
+
+                elif len(fallback_values) == 1:
+
+                    dse_close = fallback_values[0]
+
+
+            except Exception as e:
+
+                logging.warning(
+                    f"DSEX raw HTML fallback failed: {e}"
+                )
+
+
+        # =================================================
+        # FINAL DSEX CLOSE VALIDATION
+        # =================================================
+
+        if dse_close <= 0:
+
+            print()
+            print(
+                "ERROR: DSE DSEX CLOSE NOT FOUND"
+            )
+
+            logging.error(
+                "DSE DSEX close not found"
+            )
+
+            return False
+
+
+        print()
+        print(
+            "DSE DSEX Close:",
+            round(
+                dse_close,
+                2
+            )
+        )
+
+
+        # =================================================
+        # 2D. GET TOTAL VOLUME
+        # =================================================
+        #
+        # Example:
+        #
+        # DSE Midrow 4:
+        # Total Trade Total Volume Total Value in Taka (mn)
+        #
+        # DSE Midrow 5:
+        # 147461 177465534 4670.148
+        #
+        # DSE Midrow 11:
+        # Total Trade Total Volume Total Value in Taka (mn)
+        #
+        # DSE Midrow 12:
+        # 154602 191683061 5067.175
+        #
+        # The SECOND numeric row is the final/closing
+        # volume.
+        #
+        # =================================================
+
+        volume_values = []
+
+
+        # -------------------------------------------------
+        # Method 1: inspect midrows
+        # -------------------------------------------------
+
+        for index, midrow in enumerate(
+            midrows,
+            start=1
+        ):
+
+            text = midrow.get_text(
+                " ",
+                strip=True
+            )
+
+
+            text = " ".join(
+                text.split()
+            )
+
+
+            if re.search(
+                r"Total\s+Trade",
+                text,
+                re.IGNORECASE
+            ):
+
+                print(
+                    f"DSE Midrow {index}:",
+                    text
+                )
+
+
+                # -------------------------------------------------
+                # Extract integer numbers
+                # -------------------------------------------------
+
+                numbers = re.findall(
+                    r"\b[0-9][0-9,]*\b",
+                    text
+                )
+
+
+                numeric_values = []
+
+
+                for number_text in numbers:
 
                     try:
 
-                        trade_count = int(
-                            float(parts[0])
+                        cleaned = (
+                            number_text
+                            .replace(",", "")
+                            .strip()
                         )
 
-                        volume = int(
-                            float(parts[1])
+
+                        value = int(
+                            cleaned
                         )
 
-                        value_mn = float(
-                            parts[2]
-                        )
 
-                        if (
-                            trade_count >= 0
-                            and
-                            volume >= 0
-                            and
-                            value_mn >= 0
-                        ):
+                        if value > 0:
 
-                            dse_total_volume = volume
-
-                            print()
-                            print(
-                                "DSE Total Trade:",
-                                trade_count
+                            numeric_values.append(
+                                value
                             )
 
-                            print(
-                                "DSE Total Volume:",
-                                dse_total_volume
-                            )
-
-                            print(
-                                "DSE Total Value (mn):",
-                                value_mn
-                            )
-
-                            break
-
-                    except (
-                        ValueError,
-                        TypeError
-                    ):
+                    except Exception:
 
                         continue
 
-            if dse_total_volume is not None:
 
-                break
+                # -------------------------------------------------
+                # Total Volume is the SECOND number
+                #
+                # Example:
+                #
+                # 154602
+                # 191683061
+                # 5067.175
+                #
+                # -------------------------------------------------
+
+                if len(numeric_values) >= 2:
+
+                    volume_values.append(
+                        numeric_values[1]
+                    )
 
 
-    # -------------------------------------------------
-    # 5.10 VALIDATE DSE VOLUME
-    # -------------------------------------------------
+        # =================================================
+        # 2E. SELECT FINAL VOLUME
+        # =================================================
 
-    if dse_total_volume is None:
+        dse_volume = 0
 
-        raise RuntimeError(
-            "DSE TOTAL VOLUME NOT FOUND"
+
+        if len(volume_values) >= 2:
+
+            dse_volume = volume_values[-1]
+
+        elif len(volume_values) == 1:
+
+            dse_volume = volume_values[0]
+
+
+        # =================================================
+        # FALLBACK: SPECIFIC HTML VOLUME CLASS
+        # =================================================
+
+        if dse_volume <= 0:
+
+            try:
+
+                volume_divs = soup.find_all(
+                    "div",
+                    class_="m_col-wid1 colorlight"
+                )
+
+
+                fallback_volumes = []
+
+
+                for volume_div in volume_divs:
+
+                    value_text = volume_div.get_text(
+                        " ",
+                        strip=True
+                    )
+
+
+                    candidate = safe_int(
+                        value_text
+                    )
+
+
+                    if candidate > 0:
+
+                        fallback_volumes.append(
+                            candidate
+                        )
+
+
+                if len(fallback_volumes) >= 2:
+
+                    dse_volume = fallback_volumes[-1]
+
+                elif len(fallback_volumes) == 1:
+
+                    dse_volume = fallback_volumes[0]
+
+
+            except Exception as e:
+
+                logging.warning(
+                    f"DSE volume class fallback failed: {e}"
+                )
+
+
+        # =================================================
+        # 2F. RAW HTML TOTAL VOLUME FALLBACK
+        # =================================================
+
+        if dse_volume <= 0:
+
+            try:
+
+                volume_matches = re.findall(
+
+                    r"Total\s+Volume"
+                    r".{0,1000}?"
+                    r"([0-9][0-9,]*)",
+
+                    soup.get_text(
+                        " ",
+                        strip=True
+                    ),
+
+                    re.IGNORECASE
+                )
+
+
+                fallback_volumes = []
+
+
+                for value_text in volume_matches:
+
+                    candidate = safe_int(
+                        value_text
+                    )
+
+
+                    if candidate > 0:
+
+                        fallback_volumes.append(
+                            candidate
+                        )
+
+
+                if fallback_volumes:
+
+                    dse_volume = fallback_volumes[-1]
+
+
+            except Exception as e:
+
+                logging.warning(
+                    f"Total volume text fallback failed: {e}"
+                )
+
+
+        # =================================================
+        # FINAL VOLUME VALIDATION
+        # =================================================
+
+        if dse_volume <= 0:
+
+            logging.error(
+                "DSE Total Volume not found"
+            )
+
+            print()
+            print(
+                "ERROR: DSE TOTAL VOLUME NOT FOUND"
+            )
+
+            return False
+
+
+        print(
+            "DSE Total Volume:",
+            dse_volume
         )
 
 
-    if dse_total_volume < 0:
+    except Exception as e:
 
-        raise RuntimeError(
-            f"Invalid DSE Total Volume: "
-            f"{dse_total_volume}"
+        logging.error(
+            f"DSE DSEX data fetch failed: {e}"
         )
 
+        print()
+        print(
+            "DSE DSEX DATA ERROR:",
+            e
+        )
 
-    # -------------------------------------------------
-    # 5.11 PRINT FINAL DSEX DATA
-    # -------------------------------------------------
+        return False
 
-    print()
-    print(
-        "DSE DSEX Close:",
-        dsex_close
-    )
 
-    print(
-        "DSE Total Volume:",
-        dse_total_volume
-    )
+    # =====================================================
+    # 3. CREATE DSEX ROW
+    # =====================================================
+
+    row = [
+
+        "DSEX",
+
+        dse_date,
+
+        tv_open,
+
+        tv_high,
+
+        tv_low,
+
+        round(
+            dse_close,
+            2
+        ),
+
+        dse_volume
+
+    ]
+
+
+    # =====================================================
+    # 4. DISPLAY FINAL DSEX ROW
+    # =====================================================
 
     print()
     print(
@@ -2282,103 +2668,67 @@ try:
     )
 
 
-    # -------------------------------------------------
-    # 5.12 CREATE DSEX ROW
-    # -------------------------------------------------
-    #
-    # Final format:
-    #
-    # Ticker
-    # Date
-    # Open
-    # High
-    # Low
-    # Close
-    # Volume
-    #
-    # DSEX Close comes from OFFICIAL DSE.
-    # OHLC comes from TradingView.
-    # Volume comes from OFFICIAL DSE.
-    # -------------------------------------------------
-
-    dsex_row = [
-        "DSEX",
-        dse_official_date,
-        float(tv_dsex_open),
-        float(tv_dsex_high),
-        float(tv_dsex_low),
-        float(dsex_close),
-        int(dse_total_volume)
-    ]
-
-
-    # -------------------------------------------------
-    # 5.13 APPEND DSEX TO COMBINED DATA
-    # -------------------------------------------------
-
-    combined_rows.append(
-        dsex_row
-    )
-
-
-    # -------------------------------------------------
-    # 5.14 PRINT FINAL DSEX ROW
-    # -------------------------------------------------
-
     print()
     print(
         "Final DSEX Row:"
     )
 
+
     print(
         "Ticker :",
-        dsex_row[0]
+        row[0]
     )
+
 
     print(
         "Date   :",
-        dsex_row[1]
+        row[1]
     )
+
 
     print(
         "Open   :",
-        dsex_row[2]
+        row[2]
     )
+
 
     print(
         "High   :",
-        dsex_row[3]
+        row[3]
     )
+
 
     print(
         "Low    :",
-        dsex_row[4]
+        row[4]
     )
+
 
     print(
         "Close  :",
-        dsex_row[5]
+        row[5]
     )
+
 
     print(
         "Volume :",
-        dsex_row[6]
+        row[6]
     )
 
 
-except Exception as e:
-
-    print()
-    print(
-        "ERROR: DSEX collection failed"
+    logging.info(
+        "DSEX collected successfully | "
+        f"Date={dse_date}, "
+        f"Open={tv_open}, "
+        f"High={tv_high}, "
+        f"Low={tv_low}, "
+        f"Close={dse_close}, "
+        f"Volume={dse_volume}"
     )
 
-    print(
-        "Error:",
-        str(e)
-    )
 
-    raise
+    return row
+
 
     # =====================================================
     # 6. RETURN ROW
