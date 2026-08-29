@@ -2115,16 +2115,17 @@ def append_dsex_index():
         )
 
 
-        # =================================================
+               # =================================================
         # 2B. DSEX CLOSE
         #
-        # Find the actual DSEX Index row.
+        # SOURCE:
+        # https://www.dsebd.org/index.php
         #
-        # Expected DSE structure:
+        # DSE homepage structure:
         #
         # <div class="midrow">
         #     <div class="m_col-1">
-        #         DSEX Index
+        #         DSE<font size="+1">X</font> Index
         #     </div>
         #
         #     <div class="m_col-2">
@@ -2132,20 +2133,17 @@ def append_dsex_index():
         #     </div>
         # </div>
         #
+        # IMPORTANT:
+        # Do NOT search arbitrary "DSEX" occurrences.
+        # Navigation links also contain DSEX.
         # =================================================
 
         dse_close = 0.0
-
-
-        # -------------------------------------------------
-        # METHOD 1: BeautifulSoup structural search
-        # -------------------------------------------------
 
         midrows = soup.find_all(
             "div",
             class_="midrow"
         )
-
 
         print()
         print(
@@ -2153,49 +2151,106 @@ def append_dsex_index():
             len(midrows)
         )
 
+        for row_number, row_div in enumerate(
+            midrows,
+            start=1
+        ):
 
-        for row_div in midrows:
+            # ---------------------------------------------
+            # Convert complete row to visible text
+            # ---------------------------------------------
 
             row_text = row_div.get_text(
                 " ",
                 strip=True
             )
 
-            normalized_text = " ".join(
+            row_text = " ".join(
                 row_text.split()
             )
 
+            print(
+                f"DSE Midrow {row_number}:",
+                row_text[:200]
+            )
 
-            if not re.search(
-                r"DSEX\s*Index",
-                normalized_text,
-                re.IGNORECASE
+            # ---------------------------------------------
+            # Look for DSEX Index
+            #
+            # BeautifulSoup converts:
+            #
+            # DSE<font>X</font> Index
+            #
+            # into:
+            #
+            # DSEX Index
+            # ---------------------------------------------
+
+            normalized_row = re.sub(
+                r"\s+",
+                " ",
+                row_text
+            ).strip()
+
+            normalized_upper = (
+                normalized_row.upper()
+            )
+
+            if (
+                "DSEX INDEX" not in
+                normalized_upper
             ):
 
                 continue
 
+            print()
+            print(
+                "DSEX ROW FOUND:"
+            )
+
+            print(
+                normalized_row
+            )
+
+            # ---------------------------------------------
+            # Find m_col-2 inside THIS row only
+            # ---------------------------------------------
 
             value_div = row_div.find(
                 "div",
                 class_="m_col-2"
             )
 
-
             if value_div is None:
+
+                print(
+                    "DSEX m_col-2 NOT FOUND"
+                )
 
                 continue
 
-
-            candidate_text = value_div.get_text(
+            value_text = value_div.get_text(
                 " ",
                 strip=True
             )
 
-
-            candidate = safe_float(
-                candidate_text
+            print(
+                "DSEX VALUE TEXT:",
+                repr(value_text)
             )
 
+            candidate = safe_float(
+                value_text
+            )
+
+            print(
+                "DSEX CANDIDATE:",
+                candidate
+            )
+
+            # ---------------------------------------------
+            # Validate DSEX index
+            # ---------------------------------------------
 
             if (
                 candidate >= 1000
@@ -2203,131 +2258,16 @@ def append_dsex_index():
                 candidate <= 20000
             ):
 
-                dse_close = candidate
+                dse_close = round(
+                    candidate,
+                    5
+                )
 
                 break
 
 
-        # -------------------------------------------------
-        # METHOD 2: Raw HTML around "DSEX Index"
-        # -------------------------------------------------
-
-        if dse_close <= 0:
-
-            dsex_index_matches = list(
-                re.finditer(
-                    r"DSEX\s*(?:<[^>]+>\s*)?"
-                    r"Index",
-                    html,
-                    re.IGNORECASE
-                )
-            )
-
-
-            print(
-                "DSEX Index Matches:",
-                len(dsex_index_matches)
-            )
-
-
-            for match in dsex_index_matches:
-
-                start_pos = max(
-                    0,
-                    match.start() - 300
-                )
-
-                end_pos = min(
-                    len(html),
-                    match.end() + 1500
-                )
-
-
-                context = html[
-                    start_pos:end_pos
-                ]
-
-
-                # Look specifically for m_col-2
-                value_match = re.search(
-
-                    r'<div\s+class=["\'][^"\']*'
-                    r'm_col-2[^"\']*["\'][^>]*>'
-                    r'\s*'
-                    r'([0-9][0-9,.\s]*)'
-                    r'\s*'
-                    r'</div>',
-
-                    context,
-
-                    re.IGNORECASE
-                )
-
-
-                if value_match:
-
-                    candidate = safe_float(
-                        value_match.group(1)
-                    )
-
-
-                    if (
-                        candidate >= 1000
-                        and
-                        candidate <= 20000
-                    ):
-
-                        dse_close = candidate
-
-                        break
-
-
-        # -------------------------------------------------
-        # METHOD 3: Search visible page text
-        # -------------------------------------------------
-
-        if dse_close <= 0:
-
-            page_text = soup.get_text(
-                " ",
-                strip=True
-            )
-
-            page_text = " ".join(
-                page_text.split()
-            )
-
-
-            dsex_text_match = re.search(
-
-                r"DSEX\s+Index"
-                r".{0,300}?"
-                r"([0-9]{3,5}\.[0-9]{1,5})",
-
-                page_text,
-
-                re.IGNORECASE
-            )
-
-
-            if dsex_text_match:
-
-                candidate = safe_float(
-                    dsex_text_match.group(1)
-                )
-
-
-                if (
-                    candidate >= 1000
-                    and
-                    candidate <= 20000
-                ):
-
-                    dse_close = candidate
-
-
         # =================================================
-        # FINAL CLOSE VALIDATION
+        # FINAL DSEX CLOSE VALIDATION
         # =================================================
 
         if dse_close <= 0:
