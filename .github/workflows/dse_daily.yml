@@ -1,3 +1,4 @@
+```yaml
 name: DSE Daily EOD
 
 on:
@@ -83,9 +84,9 @@ jobs:
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
+          # Add only the daily data directory.
+          # The log file remains ignored.
           git add data
-
-          git add dse_data_feeder.log
 
           if git diff --cached --quiet; then
 
@@ -99,3 +100,4 @@ jobs:
             git push
 
           fi
+```
