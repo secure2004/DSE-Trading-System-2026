@@ -1914,23 +1914,23 @@ def write_combined_csv(
 
 def append_dsex_index():
 
-print()
-print("=" * 70)
-print("5. APPENDING DSEX")
-print("=" * 70)
+    print()
+    print("=" * 70)
+    print("5. APPENDING DSEX")
+    print("=" * 70)
 
-# =====================================================
-# 1. GET DSEX OPEN / HIGH / LOW FROM TRADINGVIEW
-# =====================================================
+    # =====================================================
+    # 1. GET DSEX OPEN / HIGH / LOW FROM TRADINGVIEW
+    # =====================================================
 
-try:
+    try:
 
-    handler = TA_Handler(
-        symbol="DSEX",
-        exchange="DSEBD",
-        screener="bangladesh",
-        interval=Interval.INTERVAL_1_DAY
-    )
+        handler = TA_Handler(
+            symbol="DSEX",
+            exchange="DSEBD",
+            screener="bangladesh",
+            interval=Interval.INTERVAL_1_DAY
+        )
 
     analysis = handler.get_analysis()
 
