@@ -1989,7 +1989,7 @@ def append_dsex_index():
         session = requests.Session()
 
         response = session.get(
-            DSE_INDEX_URL,
+            DSE_INDEX_URL = "https://www.dsebd.org/index.php",
             headers=DSE_HEADERS,
             timeout=30,
             verify=False
@@ -2002,7 +2002,7 @@ def append_dsex_index():
         print()
         print(
             "DSE URL:",
-            DSE_INDEX_URL
+            DSE_INDEX_URL = "https://www.dsebd.org/index.php"
         )
 
         print(
