@@ -2139,14 +2139,14 @@ def append_dsex_index():
 
         try:
 
-            dsex_pattern = re.compile(
-                r"DSE\s*"
-                r"(?:<[^>]+>\s*)?"
-                r*X
-                r"(?:</[^>]+>\s*)?"
-                r"Index",
-                re.IGNORECASE
-            )
+        dsex_pattern = re.compile(
+            r"DSE\s*"
+            r"(?:<[^>]+>\s*)?"
+            r"X"
+            r"(?:</[^>]+>\s*)?"
+            r"Index",
+            re.IGNORECASE
+        )
 
             dsex_match = dsex_pattern.search(
                 html
