@@ -1867,40 +1867,36 @@ def write_combined_csv(
 
     return True
 
+
 # =========================================================
 # PART 5: APPEND DSEX
 #
 # DSEX OPEN   -> TradingView
 # DSEX HIGH   -> TradingView
 # DSEX LOW    -> TradingView
-# DSEX CLOSE  -> DSE Website
+# DSEX CLOSE  -> DSE Website index.php
 # DSEX VOLUME -> DSE Website Total Volume
 # DSEX DATE   -> DSE Website "Last update on"
 #
-# DSE SOURCE:
-# https://www.dsebd.org/index.php
-#
 # IMPORTANT:
+# ---------------------------------------------------------
+# 1. DSE DATE is taken from:
+#       https://www.dsebd.org/index.php
 #
-# Current DSE HTML contains two sets of index data:
+#    Example:
+#       Last update on Aug 27, 2026 at 2:40 PM
 #
-# CURRENT:
-#   DSE X Index 5655.68313 15.59485 0.2765%
+# 2. DSEX CLOSE is taken from the CURRENT DSE index data.
 #
-# PRECEDING:
-#   DSE X Index 5640.08828 -3.48147 -0.06169%
+# 3. DSEX VOLUME is taken from DSE Total Volume.
 #
-# The FIRST "DSE X Index" row is the CURRENT market data.
+# 4. DSEX OPEN/HIGH/LOW are taken from TradingView.
 #
-# Likewise:
+# 5. Bangladesh timezone is explicitly:
+#       Asia/Dhaka
 #
-# CURRENT VOLUME:
-#   147461 177465534 4670.148
-#
-# PRECEDING VOLUME:
-#   154602 191683061 5067.175
-#
-# Therefore we always use the first/current rows.
+# 6. DSE HTML structure can change.
+#    Therefore multiple extraction methods are used.
 # =========================================================
 
 
@@ -1913,7 +1909,45 @@ def append_dsex_index():
 
 
     # =====================================================
-    # 1. GET DSEX OPEN / HIGH / LOW FROM TRADINGVIEW
+    # 0. TIMEZONE CHECK
+    #
+    # IMPORTANT:
+    # GitHub Actions runs on UTC.
+    # Bangladesh is Asia/Dhaka (UTC+6).
+    #
+    # Do NOT use "BST" for Bangladesh time.
+    # =====================================================
+
+    try:
+
+        from zoneinfo import ZoneInfo
+
+        bd_now = datetime.now(
+            ZoneInfo("Asia/Dhaka")
+        )
+
+        print()
+        print("Bangladesh Time:")
+
+        print(
+            bd_now.strftime(
+                "%Y-%m-%d %I:%M:%S %p"
+            )
+        )
+
+        print(
+            "Timezone: Asia/Dhaka"
+        )
+
+    except Exception as e:
+
+        logging.warning(
+            f"Bangladesh timezone check failed: {e}"
+        )
+
+
+    # =====================================================
+    # 1. GET DSEX OHLC FROM TRADINGVIEW
     # =====================================================
 
     try:
@@ -1931,17 +1965,32 @@ def append_dsex_index():
 
 
         tv_open = round(
-            float(ind.get("open", 0)),
+            float(
+                ind.get(
+                    "open",
+                    0
+                )
+            ),
             2
         )
 
         tv_high = round(
-            float(ind.get("high", 0)),
+            float(
+                ind.get(
+                    "high",
+                    0
+                )
+            ),
             2
         )
 
         tv_low = round(
-            float(ind.get("low", 0)),
+            float(
+                ind.get(
+                    "low",
+                    0
+                )
+            ),
             2
         )
 
@@ -1995,6 +2044,7 @@ def append_dsex_index():
             f"TradingView DSEX fetch failed: {e}"
         )
 
+        print()
         print(
             "TRADINGVIEW DSEX ERROR:",
             e
@@ -2071,7 +2121,7 @@ def append_dsex_index():
         #
         # Last update on Aug 27, 2026 at 2:40 PM
         #
-        # This is the master DSE trading date.
+        # This is the MASTER DSE DATE.
         # =================================================
 
         date_match = re.search(
@@ -2101,16 +2151,18 @@ def append_dsex_index():
             return False
 
 
-        month_name = date_match.group(1)
+        month_name = (
+            date_match.group(1)
+        )
 
-        day_number = date_match.group(2)
+        day_number = (
+            date_match.group(2)
+        )
 
-        year_number = date_match.group(3)
+        year_number = (
+            date_match.group(3)
+        )
 
-
-        # -------------------------------------------------
-        # Convert DSE date to DATE_FMT
-        # -------------------------------------------------
 
         try:
 
@@ -2126,36 +2178,19 @@ def append_dsex_index():
                 DATE_FMT
             )
 
-
         except ValueError:
 
-            try:
+            dse_date = datetime.strptime(
 
-                dse_date = datetime.strptime(
+                f"{month_name} "
+                f"{day_number} "
+                f"{year_number}",
 
-                    f"{month_name} "
-                    f"{day_number} "
-                    f"{year_number}",
+                "%b %d %Y"
 
-                    "%b %d %Y"
-
-                ).strftime(
-                    DATE_FMT
-                )
-
-
-            except ValueError:
-
-                logging.error(
-                    "Unable to parse DSE Last update date"
-                )
-
-                print()
-                print(
-                    "ERROR: INVALID DSE DATE"
-                )
-
-                return False
+            ).strftime(
+                DATE_FMT
+            )
 
 
         print()
@@ -2166,236 +2201,425 @@ def append_dsex_index():
 
 
         # =================================================
-        # 2B. FIND ALL DSE MIDROW SECTIONS
+        # 2B. GET DSEX CLOSE
+        #
+        # CURRENT DSE HTML EXAMPLE:
+        #
+        # DSE Midrow 1:
+        # DSE X Index 5655.68313 15.59485 0.2765%
+        #
+        # DSE Midrow 8:
+        # DSE X Index 5640.08828 -3.48147 -0.06169%
+        #
+        # The SECOND DSEX/DSE X row is the CURRENT/CLOSE
+        # value in the DSE page structure.
+        #
+        # We therefore prefer structural extraction and
+        # specifically collect DSE X Index numeric rows.
         # =================================================
 
-        midrows = soup.find_all(
-            "div",
-            class_="midrow"
-        )
+
+        dse_close = 0.0
 
 
-        print()
-        print(
-            "DSE Midrow Sections Found:",
-            len(midrows)
-        )
+        # =================================================
+        # METHOD 1
+        #
+        # BeautifulSoup structural extraction
+        # =================================================
 
+        try:
 
-        if len(midrows) == 0:
-
-            logging.error(
-                "No DSE midrow sections found"
+            midrows = soup.find_all(
+                "div",
+                class_="midrow"
             )
 
             print()
             print(
-                "ERROR: DSE MIDROW SECTIONS NOT FOUND"
-            )
-
-            return False
-
-
-        # =================================================
-        # 2C. DISPLAY MIDROW INFORMATION
-        #
-        # This is useful for GitHub Actions debugging.
-        # =================================================
-
-        for row_number, row_div in enumerate(
-            midrows,
-            start=1
-        ):
-
-            row_text = row_div.get_text(
-                " ",
-                strip=True
-            )
-
-            row_text = " ".join(
-                row_text.split()
-            )
-
-            print(
-                f"DSE Midrow {row_number}:",
-                row_text[:250]
+                "DSE Midrow Sections Found:",
+                len(midrows)
             )
 
 
-        # =================================================
-        # 2D. FIND CURRENT DSEX ROW
-        #
-        # DSE HTML renders:
-        #
-        # DSE<font>X</font> Index
-        #
-        # BeautifulSoup gives:
-        #
-        # DSE X Index
-        #
-        # IMPORTANT:
-        #
-        # FIRST matching row = CURRENT DATA
-        #
-        # SECOND matching row = PRECEDING DATA
-        # =================================================
-
-        dsex_rows = []
+            dsex_candidates = []
 
 
-        for row_number, row_div in enumerate(
-            midrows,
-            start=1
-        ):
-
-            row_text = row_div.get_text(
-                " ",
-                strip=True
-            )
-
-            row_text = " ".join(
-                row_text.split()
-            )
-
-
-            if re.search(
-                r"DSE\s+X\s+Index",
-                row_text,
-                re.IGNORECASE
+            for index, midrow in enumerate(
+                midrows,
+                start=1
             ):
 
-                dsex_rows.append(
-                    (
-                        row_number,
-                        row_div,
-                        row_text
+                text = midrow.get_text(
+                    " ",
+                    strip=True
+                )
+
+                text = " ".join(
+                    text.split()
+                )
+
+
+                if (
+                    "DSE X Index"
+                    not in text
+                ):
+
+                    continue
+
+
+                print(
+                    f"DSE Midrow {index}:",
+                    text
+                )
+
+
+                # -----------------------------------------
+                # Extract decimal numbers
+                # -----------------------------------------
+
+                numbers = re.findall(
+
+                    r"\b"
+                    r"\d{3,5}"
+                    r"\."
+                    r"\d{1,5}"
+                    r"\b",
+
+                    text
+                )
+
+
+                for number_text in numbers:
+
+                    candidate = safe_float(
+                        number_text
+                    )
+
+
+                    if (
+                        candidate >= 1000
+                        and
+                        candidate <= 20000
+                    ):
+
+                        dsex_candidates.append(
+                            candidate
+                        )
+
+                        break
+
+
+            # -------------------------------------------------
+            # IMPORTANT:
+            #
+            # If two DSE X Index rows exist, the LAST one is
+            # normally the current/latest index value.
+            #
+            # Example:
+            #
+            # 5655.68313  -> previous/reference
+            # 5640.08828  -> current/latest
+            # -------------------------------------------------
+
+            if dsex_candidates:
+
+                dse_close = (
+                    dsex_candidates[-1]
+                )
+
+
+        except Exception as e:
+
+            logging.warning(
+                "DSEX structural extraction failed: "
+                f"{e}"
+            )
+
+
+        # =================================================
+        # METHOD 2
+        #
+        # Search all HTML elements containing
+        # "DSE X Index"
+        # =================================================
+
+        if dse_close <= 0:
+
+            try:
+
+                dsex_matches = soup.find_all(
+                    string=re.compile(
+                        r"DSE\s+X\s+Index",
+                        re.IGNORECASE
                     )
                 )
 
 
-        print()
-        print(
-            "DSEX Rows Found:",
-            len(dsex_rows)
-        )
+                print()
+                print(
+                    "DSEX Index Matches:",
+                    len(dsex_matches)
+                )
 
 
-        if len(dsex_rows) == 0:
+                dsex_candidates = []
 
-            logging.error(
-                "DSEX row not found"
-            )
 
-            print()
-            print(
-                "ERROR: DSE DSEX ROW NOT FOUND"
-            )
+                for match in dsex_matches:
 
-            return False
+                    parent = match.parent
+
+
+                    if parent is None:
+                        continue
+
+
+                    parent_text = parent.get_text(
+                        " ",
+                        strip=True
+                    )
+
+
+                    parent_text = " ".join(
+                        parent_text.split()
+                    )
+
+
+                    numbers = re.findall(
+
+                        r"\b"
+                        r"\d{3,5}"
+                        r"\."
+                        r"\d{1,5}"
+                        r"\b",
+
+                        parent_text
+                    )
+
+
+                    for number_text in numbers:
+
+                        candidate = safe_float(
+                            number_text
+                        )
+
+
+                        if (
+                            candidate >= 1000
+                            and
+                            candidate <= 20000
+                        ):
+
+                            dsex_candidates.append(
+                                candidate
+                            )
+
+                            break
+
+
+                if dsex_candidates:
+
+                    dse_close = (
+                        dsex_candidates[-1]
+                    )
+
+
+            except Exception as e:
+
+                logging.warning(
+                    "DSEX label extraction failed: "
+                    f"{e}"
+                )
 
 
         # =================================================
-        # 2E. CURRENT DSEX ROW
+        # METHOD 3
         #
-        # ALWAYS USE FIRST MATCH.
+        # RAW HTML SEARCH
+        #
+        # Search around "DSE X Index"
         # =================================================
 
-        current_dsex_row_number = (
-            dsex_rows[0][0]
-        )
+        if dse_close <= 0:
 
-        current_dsex_row = (
-            dsex_rows[0][1]
-        )
+            try:
 
-        current_dsex_text = (
-            dsex_rows[0][2]
-        )
+                raw_matches = []
 
 
-        print()
-        print(
-            "CURRENT DSEX ROW:"
-        )
+                for match in re.finditer(
 
-        print(
-            "Midrow:",
-            current_dsex_row_number
-        )
+                    r"DSE\s+X\s+Index",
 
-        print(
-            current_dsex_text
-        )
+                    html,
+
+                    re.IGNORECASE
+                ):
+
+                    position = match.start()
+
+
+                    start_pos = max(
+                        0,
+                        position - 300
+                    )
+
+
+                    end_pos = min(
+                        len(html),
+                        position + 2000
+                    )
+
+
+                    context = html[
+                        start_pos:end_pos
+                    ]
+
+
+                    numbers = re.findall(
+
+                        r"\b"
+                        r"\d{3,5}"
+                        r"\."
+                        r"\d{1,5}"
+                        r"\b",
+
+                        context
+                    )
+
+
+                    for number_text in numbers:
+
+                        candidate = safe_float(
+                            number_text
+                        )
+
+
+                        if (
+                            candidate >= 1000
+                            and
+                            candidate <= 20000
+                        ):
+
+                            raw_matches.append(
+                                candidate
+                            )
+
+                            break
+
+
+                if raw_matches:
+
+                    dse_close = (
+                        raw_matches[-1]
+                    )
+
+
+            except Exception as e:
+
+                logging.warning(
+                    "DSEX raw HTML extraction failed: "
+                    f"{e}"
+                )
 
 
         # =================================================
-        # 2F. EXTRACT DSEX CLOSE
+        # METHOD 4
+        #
+        # GENERIC PAGE TEXT SEARCH
         # =================================================
 
-        value_div = current_dsex_row.find(
-            "div",
-            class_="m_col-2"
-        )
+        if dse_close <= 0:
+
+            try:
+
+                page_text = soup.get_text(
+                    " ",
+                    strip=True
+                )
 
 
-        if value_div is None:
+                page_text = " ".join(
+                    page_text.split()
+                )
 
-            logging.error(
-                "DSEX m_col-2 not found"
-            )
+
+                matches = re.findall(
+
+                    r"DSE\s+X\s+Index"
+                    r".{0,500}?"
+                    r"([0-9]{3,5}"
+                    r"\.[0-9]{1,5})",
+
+                    page_text,
+
+                    re.IGNORECASE
+                )
+
+
+                dsex_candidates = []
+
+
+                for value in matches:
+
+                    candidate = safe_float(
+                        value
+                    )
+
+
+                    if (
+                        candidate >= 1000
+                        and
+                        candidate <= 20000
+                    ):
+
+                        dsex_candidates.append(
+                            candidate
+                        )
+
+
+                if dsex_candidates:
+
+                    dse_close = (
+                        dsex_candidates[-1]
+                    )
+
+
+            except Exception as e:
+
+                logging.warning(
+                    "DSEX page text extraction failed: "
+                    f"{e}"
+                )
+
+
+        # =================================================
+        # FINAL DSEX CLOSE VALIDATION
+        # =================================================
+
+        if dse_close <= 0:
 
             print()
             print(
-                "ERROR: DSEX VALUE DIV NOT FOUND"
+                "ERROR: DSE DSEX CLOSE NOT FOUND"
+            )
+
+            logging.error(
+                "DSE DSEX close not found"
             )
 
             return False
 
 
-        dse_close_text = value_div.get_text(
-            " ",
-            strip=True
+        # -------------------------------------------------
+        # Normalize close
+        # -------------------------------------------------
+
+        dse_close = round(
+            float(dse_close),
+            2
         )
-
-
-        print(
-            "DSEX CLOSE TEXT:",
-            repr(dse_close_text)
-        )
-
-
-        dse_close = safe_float(
-            dse_close_text
-        )
-
-
-        print(
-            "DSEX CLOSE:",
-            dse_close
-        )
-
-
-        # =================================================
-        # 2G. VALIDATE DSEX CLOSE
-        # =================================================
-
-        if not (
-            dse_close >= 1000
-            and
-            dse_close <= 20000
-        ):
-
-            logging.error(
-                f"Invalid DSE DSEX close: {dse_close}"
-            )
-
-            print()
-            print(
-                "ERROR: INVALID DSE DSEX CLOSE:",
-                dse_close
-            )
-
-            return False
 
 
         print()
@@ -2406,162 +2630,450 @@ def append_dsex_index():
 
 
         # =================================================
-        # 2H. FIND CURRENT TOTAL VOLUME
+        # 2C. GET TOTAL VOLUME
         #
-        # The current DSEX row is followed by:
+        # DSE Midrow structure:
         #
         # Total Trade Total Volume Total Value in Taka (mn)
         #
-        # followed by:
+        # 154602 191683061 5067.175
         #
-        # 147461 177465534 4670.148
-        #
-        # We search only AFTER the FIRST DSEX ROW.
+        # Therefore the SECOND numeric value is volume.
         # =================================================
+
 
         dse_volume = 0
 
 
-        current_dsex_index = None
+        # =================================================
+        # METHOD 1
+        #
+        # Find the "Total Volume" header and inspect its
+        # nearby parent/container.
+        # =================================================
 
+        try:
 
-        for i, row_div in enumerate(midrows):
-
-            row_text = row_div.get_text(
-                " ",
-                strip=True
+            total_volume_labels = soup.find_all(
+                string=re.compile(
+                    r"Total\s+Volume",
+                    re.IGNORECASE
+                )
             )
 
-            row_text = " ".join(
-                row_text.split()
+
+            for label in total_volume_labels:
+
+                parent = label.parent
+
+
+                if parent is None:
+                    continue
+
+
+                # -----------------------------------------
+                # Inspect nearby parent containers
+                # -----------------------------------------
+
+                containers = []
+
+
+                current = parent
+
+
+                for _ in range(5):
+
+                    if current is None:
+                        break
+
+
+                    containers.append(
+                        current
+                    )
+
+
+                    current = (
+                        current.parent
+                    )
+
+
+                for container in containers:
+
+                    container_text = (
+                        container.get_text(
+                            " ",
+                            strip=True
+                        )
+                    )
+
+
+                    container_text = " ".join(
+                        container_text.split()
+                    )
+
+
+                    # -------------------------------------
+                    # Need a row containing actual numbers
+                    # -------------------------------------
+
+                    numbers = re.findall(
+
+                        r"\b"
+                        r"\d[\d,]*"
+                        r"(?:\.\d+)?"
+                        r"\b",
+
+                        container_text
+                    )
+
+
+                    numeric_values = []
+
+
+                    for number_text in numbers:
+
+                        candidate = safe_int(
+                            number_text
+                        )
+
+
+                        if candidate > 0:
+
+                            numeric_values.append(
+                                candidate
+                            )
+
+
+                    # -------------------------------------
+                    # For DSE:
+                    #
+                    # Total Trade
+                    # Total Volume
+                    # Total Value
+                    #
+                    # volume is normally the SECOND
+                    # large integer.
+                    # -------------------------------------
+
+                    if len(
+                        numeric_values
+                    ) >= 2:
+
+                        for candidate in numeric_values:
+
+                            if (
+                                candidate
+                                >=
+                                1000000
+                            ):
+
+                                dse_volume = (
+                                    candidate
+                                )
+
+                                break
+
+
+                    if dse_volume > 0:
+                        break
+
+
+                if dse_volume > 0:
+                    break
+
+
+        except Exception as e:
+
+            logging.warning(
+                "DSE volume structural extraction failed: "
+                f"{e}"
             )
-
-
-            if re.search(
-                r"DSE\s+X\s+Index",
-                row_text,
-                re.IGNORECASE
-            ):
-
-                current_dsex_index = i
-
-                break
-
-
-        if current_dsex_index is None:
-
-            logging.error(
-                "Current DSEX row index not found"
-            )
-
-            print()
-            print(
-                "ERROR: CURRENT DSEX ROW INDEX NOT FOUND"
-            )
-
-            return False
 
 
         # =================================================
-        # 2I. SEARCH NEXT ROWS FOR CURRENT VOLUME
+        # METHOD 2
+        #
+        # STRUCTURAL MIDROW EXTRACTION
+        #
+        # Find rows:
+        #
+        # Total Trade Total Volume Total Value...
+        #
+        # followed by:
+        #
+        # 154602 191683061 5067.175
+        #
+        # The second integer is Total Volume.
         # =================================================
 
-        for i in range(
+        if dse_volume <= 0:
 
-            current_dsex_index + 1,
+            try:
 
-            min(
-                current_dsex_index + 6,
-                len(midrows)
-            )
-
-        ):
-
-            candidate_row = midrows[i]
+                volume_candidates = []
 
 
-            candidate_text = candidate_row.get_text(
-                " ",
-                strip=True
-            )
+                for midrow in midrows:
 
-            candidate_text = " ".join(
-                candidate_text.split()
-            )
+                    text = midrow.get_text(
+                        " ",
+                        strip=True
+                    )
 
 
-            # ---------------------------------------------
-            # Skip the Total Volume header row
-            # ---------------------------------------------
-
-            if (
-                "TOTAL VOLUME"
-                in
-                candidate_text.upper()
-            ):
-
-                continue
+                    text = " ".join(
+                        text.split()
+                    )
 
 
-            # ---------------------------------------------
-            # Extract integer numbers
-            # ---------------------------------------------
+                    if (
+                        "Total Trade"
+                        not in text
+                    ):
 
-            number_matches = re.findall(
-                r"\b\d[\d,]*\b",
-                candidate_text
-            )
+                        continue
 
 
-            if len(number_matches) < 3:
+                    # -------------------------------------
+                    # Extract integer values
+                    # -------------------------------------
 
-                continue
+                    numbers = re.findall(
 
+                        r"\b"
+                        r"\d[\d,]*"
+                        r"\b",
 
-            # ---------------------------------------------
-            # Current market row:
-            #
-            # Number 1 = Total Trade
-            # Number 2 = Total Volume
-            # Number 3 = Total Value
-            # ---------------------------------------------
-
-            candidate_volume = safe_int(
-                number_matches[1]
-            )
+                        text
+                    )
 
 
-            if candidate_volume > 0:
+                    numeric_values = []
 
-                dse_volume = (
-                    candidate_volume
+
+                    for number_text in numbers:
+
+                        candidate = safe_int(
+                            number_text
+                        )
+
+
+                        if candidate > 0:
+
+                            numeric_values.append(
+                                candidate
+                            )
+
+
+                    # -------------------------------------
+                    # If this row contains at least two
+                    # integers, the large second integer
+                    # is normally Total Volume.
+                    # -------------------------------------
+
+                    if len(
+                        numeric_values
+                    ) >= 2:
+
+                        for candidate in numeric_values:
+
+                            if (
+                                candidate
+                                >=
+                                1000000
+                            ):
+
+                                volume_candidates.append(
+                                    candidate
+                                )
+
+                                break
+
+
+                if volume_candidates:
+
+                    # Latest/current row
+                    dse_volume = (
+                        volume_candidates[-1]
+                    )
+
+
+            except Exception as e:
+
+                logging.warning(
+                    "DSE midrow volume extraction failed: "
+                    f"{e}"
                 )
-
-
-                print()
-                print(
-                    "CURRENT TOTAL VOLUME ROW:"
-                )
-
-                print(
-                    "Midrow:",
-                    i + 1
-                )
-
-                print(
-                    candidate_text
-                )
-
-                print(
-                    "DSE Total Volume:",
-                    dse_volume
-                )
-
-                break
 
 
         # =================================================
-        # 2J. FINAL VOLUME VALIDATION
+        # METHOD 3
+        #
+        # RAW HTML SEARCH
+        #
+        # Search:
+        #
+        # Total Trade Total Volume
+        #
+        # and nearby numeric values.
+        # =================================================
+
+        if dse_volume <= 0:
+
+            try:
+
+                volume_candidates = []
+
+
+                for match in re.finditer(
+
+                    r"Total\s+Trade"
+                    r".{0,2500}?"
+                    r"Total\s+Volume",
+
+                    html,
+
+                    re.IGNORECASE
+                ):
+
+                    start_pos = (
+                        match.start()
+                    )
+
+
+                    end_pos = min(
+                        len(html),
+                        start_pos + 5000
+                    )
+
+
+                    context = html[
+                        start_pos:end_pos
+                    ]
+
+
+                    numbers = re.findall(
+
+                        r"\b"
+                        r"\d[\d,]*"
+                        r"\b",
+
+                        context
+                    )
+
+
+                    numeric_values = []
+
+
+                    for number_text in numbers:
+
+                        candidate = safe_int(
+                            number_text
+                        )
+
+
+                        if candidate > 0:
+
+                            numeric_values.append(
+                                candidate
+                            )
+
+
+                    for candidate in numeric_values:
+
+                        if (
+                            candidate
+                            >=
+                            1000000
+                        ):
+
+                            volume_candidates.append(
+                                candidate
+                            )
+
+                            break
+
+
+                if volume_candidates:
+
+                    dse_volume = (
+                        volume_candidates[-1]
+                    )
+
+
+            except Exception as e:
+
+                logging.warning(
+                    "DSE raw volume extraction failed: "
+                    f"{e}"
+                )
+
+
+        # =================================================
+        # METHOD 4
+        #
+        # GENERIC "TOTAL VOLUME" TEXT SEARCH
+        # =================================================
+
+        if dse_volume <= 0:
+
+            try:
+
+                page_text = soup.get_text(
+                    " ",
+                    strip=True
+                )
+
+
+                page_text = " ".join(
+                    page_text.split()
+                )
+
+
+                volume_matches = re.findall(
+
+                    r"Total\s+Trade"
+                    r".{0,1000}?"
+                    r"Total\s+Volume"
+                    r".{0,1000}?"
+                    r"([0-9][0-9,\s]*)",
+
+                    page_text,
+
+                    re.IGNORECASE
+                )
+
+
+                for value_text in volume_matches:
+
+                    candidate = safe_int(
+                        value_text
+                    )
+
+
+                    if (
+                        candidate
+                        >=
+                        1000000
+                    ):
+
+                        dse_volume = (
+                            candidate
+                        )
+
+                        break
+
+
+            except Exception as e:
+
+                logging.warning(
+                    "DSE generic volume extraction failed: "
+                    f"{e}"
+                )
+
+
+        # =================================================
+        # FINAL VOLUME VALIDATION
         # =================================================
 
         if dse_volume <= 0:
@@ -2578,7 +3090,6 @@ def append_dsex_index():
             return False
 
 
-        print()
         print(
             "DSE Total Volume:",
             dse_volume
@@ -2586,7 +3097,7 @@ def append_dsex_index():
 
 
     # =====================================================
-    # END OF DSE WEBSITE TRY BLOCK
+    # DSE DATA FETCH EXCEPTION
     # =====================================================
 
     except Exception as e:
@@ -2636,12 +3147,10 @@ def append_dsex_index():
         "DSEX data collected successfully"
     )
 
-
     print()
     print(
         "Final DSEX Row:"
     )
-
 
     print(
         "Ticker :",
@@ -2679,23 +3188,34 @@ def append_dsex_index():
     )
 
 
+    # =====================================================
+    # 5. LOGGING
+    # =====================================================
+
     logging.info(
+
         "DSEX collected successfully | "
+
         f"Date={dse_date}, "
+
         f"Open={tv_open}, "
+
         f"High={tv_high}, "
+
         f"Low={tv_low}, "
+
         f"Close={dse_close}, "
+
         f"Volume={dse_volume}"
+
     )
 
 
     # =====================================================
-    # 5. RETURN DSEX ROW
+    # 6. RETURN ROW
     # =====================================================
 
     return row
-
 
 # =========================================================
 # CLOUD HELPERS
