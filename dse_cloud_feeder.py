@@ -776,13 +776,24 @@ def scrape_dse_latest_prices(
         "Low",
         "Close"
     ]:
+
         df[col] = df[col].apply(
             safe_float
         )
 
+
     df["Volume"] = df["Volume"].apply(
         safe_int
     )
+
+
+    # =====================================================
+    # REMOVE INVALID CLOSE
+    # =====================================================
+
+    df = df[
+        df["Close"] > 0
+    ]
 
 
     # =====================================================
