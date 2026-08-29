@@ -766,79 +766,7 @@ def scrape_dse_latest_prices(
             return False
 
 
-    # =====================================================
-    # CLEAN DATA
-    # =====================================================
 
-    for col in [
-        "Open",
-        "High",
-        "Low",
-        "Close"
-    ]:
-
-        df[col] = df[col].apply(
-            safe_float
-        )
-
-
-    df["Volume"] = df["Volume"].apply(
-        safe_int
-    )
-
-
-# =====================================================
-# CLEAN DATA
-# =====================================================
-
-for col in [
-    "Open",
-    "High",
-    "Low",
-    "Close"
-]:
-    df[col] = df[col].apply(
-        safe_float
-    )
-
-df["Volume"] = df["Volume"].apply(
-    safe_int
-)
-
-
-# =====================================================
-# VALID SYMBOLS
-# =====================================================
-
-df = df[
-    df["Ticker"]
-    .astype(str)
-    .str.match(
-        r"^[A-Z0-9]+$"
-    )
-]
-
-
-# =====================================================
-# CRITICAL EMPTY-DATA PROTECTION
-# =====================================================
-
-if df.empty:
-
-    logging.error(
-        "DSE returned zero valid symbols"
-    )
-
-    print()
-    print(
-        "ERROR: DSE RETURNED ZERO VALID SYMBOLS"
-    )
-
-    print(
-        "DSE DATA WILL NOT BE WRITTEN."
-    )
-
-    return False
 
     # =====================================================
     # DATE
