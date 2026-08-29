@@ -766,58 +766,59 @@ def scrape_dse_latest_prices(
             return False
 
 
-# =====================================================
-# CLEAN DATA
-# =====================================================
+    # =====================================================
+    # CLEAN DATA
+    # =====================================================
 
-for col in [
-    "Open",
-    "High",
-    "Low",
-    "Close"
-]:
-    df[col] = df[col].apply(
-        safe_float
+    for col in [
+        "Open",
+        "High",
+        "Low",
+        "Close"
+    ]:
+        df[col] = df[col].apply(
+            safe_float
+        )
+
+    df["Volume"] = df["Volume"].apply(
+        safe_int
     )
 
-df["Volume"] = df["Volume"].apply(
-    safe_int
-)
+
+    # =====================================================
+    # VALID SYMBOLS
+    # =====================================================
+
+    df = df[
+        df["Ticker"]
+        .astype(str)
+        .str.match(
+            r"^[A-Z0-9]+$"
+        )
+    ]
 
 
-# =====================================================
-# VALID SYMBOLS
-# =====================================================
+    # =====================================================
+    # CRITICAL EMPTY-DATA PROTECTION
+    # =====================================================
 
-df = df[
-    df["Ticker"]
-    .astype(str)
-    .str.match(
-        r"^[A-Z0-9]+$"
-    )
-]
+    if df.empty:
 
+        logging.error(
+            "DSE returned zero valid symbols"
+        )
 
-# =====================================================
-# CRITICAL EMPTY-DATA PROTECTION
-# =====================================================
+        print()
+        print(
+            "ERROR: DSE RETURNED ZERO VALID SYMBOLS"
+        )
 
-if df.empty:
+        print(
+            "DSE DATA WILL NOT BE WRITTEN."
+        )
 
-    logging.error(
-        "DSE returned zero valid symbols"
-    )
+        return False
 
-    print()
-    print(
-        "ERROR: DSE RETURNED ZERO VALID SYMBOLS"
-    )
-
-    print(
-        "DSE DATA WILL NOT BE WRITTEN."
-    )
-
-    return False
 
     # =====================================================
     # DATE
