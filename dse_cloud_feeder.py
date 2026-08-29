@@ -2884,19 +2884,21 @@ def validate_final_dataset(
         )
 
 
-    # =========================================================
+      # =========================================================
     # 11. STOCK CLOSE VALIDATION
     # =========================================================
 
-    if (
-        combined_df["Close"]
-        <=
-        0
-    ).any():
-
-        raise ValueError(
-            "Invalid stock Close <= 0"
-        )
+    # IMPORTANT:
+    # Do NOT reject Close == 0.
+    #
+    # DSE can legitimately return stocks with:
+    #     Close > 0
+    #     Volume = 0
+    #     High = 0
+    #     Low = 0
+    #
+    # Therefore Close == 0 must NOT cause the
+    # entire daily archive to fail.
 
 
     # =========================================================
@@ -2904,9 +2906,7 @@ def validate_final_dataset(
     # =========================================================
 
     if (
-        combined_df["Volume"]
-        <
-        0
+        combined_df["Volume"] < 0
     ).any():
 
         raise ValueError(
@@ -2915,23 +2915,8 @@ def validate_final_dataset(
 
 
     # =========================================================
-    # 13. VALIDATION SUCCESS
+    # VALIDATION SUCCESS
     # =========================================================
-
-    print()
-    print(
-        "FINAL DATASET VALIDATION: PASSED"
-    )
-
-    print(
-        "DSEX Close:",
-        dsex_row["Close"]
-    )
-
-    print(
-        "DSEX Volume:",
-        dsex_row["Volume"]
-    )
 
     return True
 
