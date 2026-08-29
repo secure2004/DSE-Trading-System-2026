@@ -1868,117 +1868,76 @@ def write_combined_csv(
     return True
 
 
-
-# =========================================================
-# PART 5: APPEND DSEX
-#
-# DSEX OPEN   -> TradingView
-# DSEX HIGH   -> TradingView
-# DSEX LOW    -> TradingView
-# DSEX CLOSE  -> DSE Website
-# DSEX VOLUME -> DSE Website
-# DSEX DATE   -> DSE Website "Last update on"
-#
-# DSE WEBSITE STRUCTURE:
-#
-# DSE X Index 5655.68313 15.59485 0.2765%
-# DSE X Index 5640.08828 -3.48147 -0.06169%
-#
-# The first DSE X Index row is the current/live value.
-# The second DSE X Index row is the closing value.
-#
-# Total Volume:
-#
-# First volume row  = current/live
-# Second volume row = closing/final
-#
-# Therefore:
-#
-# DSEX CLOSE  = second DSE X Index value
-# DSEX VOLUME = second Total Volume value
-#
+# =====================================================
+# 5. APPENDING DSEX
+# =====================================================
 
 print()
 print("=" * 70)
 print("5. APPENDING DSEX")
 print("=" * 70)
-print()
 
 try:
 
     # -------------------------------------------------
-    # 5.1 GET TRADINGVIEW DSEX OHLC
+    # 5.1 BANGLADESH TIME
     # -------------------------------------------------
 
-    print("Bangladesh Time:")
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
 
-    try:
-        from zoneinfo import ZoneInfo
-        from datetime import datetime
-
-        bd_now = datetime.now(
-            ZoneInfo("Asia/Dhaka")
-        )
-
-        print(
-            bd_now.strftime(
-                "%Y-%m-%d %I:%M:%S %p"
-            )
-        )
-
-        print("Timezone: Asia/Dhaka")
-
-    except Exception as e:
-
-        print(
-            "WARNING: Bangladesh timezone display failed:",
-            e
-        )
+    bd_now = datetime.now(
+        ZoneInfo("Asia/Dhaka")
+    )
 
     print()
-
-    # -------------------------------------------------
-    # TradingView DSEX
-    # -------------------------------------------------
-
-    tv_open = None
-    tv_high = None
-    tv_low = None
-
-    try:
-
-        # Keep your existing TradingView logic here.
-        # The variables below must be populated by the
-        # TradingView section already present in your feeder.
-
-        tv_open = float(tv_open)
-        tv_high = float(tv_high)
-        tv_low = float(tv_low)
-
-        print("TradingView DSEX OHLC:")
-        print("Open :", tv_open)
-        print("High :", tv_high)
-        print("Low  :", tv_low)
-
-    except Exception as e:
-
-        print()
-        print(
-            "WARNING: TradingView DSEX OHLC unavailable:",
-            e
+    print("Bangladesh Time:")
+    print(
+        bd_now.strftime(
+            "%Y-%m-%d %I:%M:%S %p"
         )
+    )
 
-        print(
-            "Falling back to DSE DSEX OHLC."
-        )
-
-        tv_open = None
-        tv_high = None
-        tv_low = None
+    print("Timezone: Asia/Dhaka")
 
 
     # -------------------------------------------------
-    # 5.2 DOWNLOAD OFFICIAL DSE INDEX PAGE
+    # 5.2 TRADINGVIEW DSEX OHLC
+    # -------------------------------------------------
+    #
+    # These variables should already be collected
+    # earlier by your TradingView section.
+    #
+    # Required:
+    #   tv_dsex_open
+    #   tv_dsex_high
+    #   tv_dsex_low
+    #
+    # If your existing code uses different variable
+    # names, keep those existing names here.
+    # -------------------------------------------------
+
+    print()
+    print("TradingView DSEX OHLC:")
+
+    print(
+        "Open :",
+        tv_dsex_open
+    )
+
+    print(
+        "High :",
+        tv_dsex_high
+    )
+
+    print(
+        "Low  :",
+        tv_dsex_low
+    )
+
+
+    # -------------------------------------------------
+    # 5.3 DOWNLOAD OFFICIAL DSE INDEX PAGE
     # -------------------------------------------------
 
     DSE_INDEX_URL = (
@@ -1999,7 +1958,10 @@ try:
     html = response.text
 
     print()
-    print("DSE URL:", DSE_INDEX_URL)
+    print(
+        "DSE URL:",
+        DSE_INDEX_URL
+    )
 
     print(
         "DSE Final URL:",
@@ -2017,15 +1979,23 @@ try:
         "bytes"
     )
 
+
+    # -------------------------------------------------
+    # 5.4 VERIFY OFFICIAL DSE DATE
+    # -------------------------------------------------
+
     print()
+
+    dse_official_date = official_trading_date
+
     print(
         "DSE Official Date:",
-        official_dse_date
+        dse_official_date
     )
 
 
     # -------------------------------------------------
-    # 5.3 PARSE DSE PAGE
+    # 5.5 PARSE DSE HTML
     # -------------------------------------------------
 
     soup = BeautifulSoup(
@@ -2033,346 +2003,247 @@ try:
         "html.parser"
     )
 
-    # -------------------------------------------------
-    # Find all table rows
-    # -------------------------------------------------
-
-    dse_rows = []
-
-    for tr in soup.find_all("tr"):
-
-        cells = []
-
-        for cell in tr.find_all(
-            ["td", "th"]
-        ):
-
-            text = cell.get_text(
-                " ",
-                strip=True
-            )
-
-            if text:
-                cells.append(text)
-
-        if cells:
-            dse_rows.append(cells)
-
 
     # -------------------------------------------------
-    # DEBUG: SHOW DSE X INDEX ROWS
+    # 5.6 FIND DSE MIDROW SECTIONS
     # -------------------------------------------------
 
-    dsex_rows = []
+    midrow_sections = []
 
-    for row in dse_rows:
+    for element in soup.find_all(
+        string=True
+    ):
 
-        row_text = " ".join(row)
+        text = " ".join(
+            element.strip().split()
+        )
 
-        if "DSE X Index" in row_text:
-
-            dsex_rows.append(row)
+        if text:
+            midrow_sections.append(text)
 
 
     print()
     print(
-        "DSE DSEX Rows Found:",
-        len(dsex_rows)
+        "DSE Midrow Sections Found:",
+        len(midrow_sections)
     )
 
 
     # -------------------------------------------------
+    # 5.7 FIND OFFICIAL DSEX
+    # -------------------------------------------------
+    #
     # IMPORTANT:
     #
-    # The DSE page currently contains multiple
-    # "DSE X Index" sections.
-    #
-    # The FIRST row is the current/official DSEX
-    # value shown at the top of the page.
-    #
-    # Example:
+    # The DSE page contains:
     #
     # DSE X Index 5655.68313 15.59485 0.2765%
     #
-    # Therefore:
+    # This is the CURRENT / OFFICIAL DSEX value.
     #
-    # DSEX CLOSE = 5655.68313
-    #
-    # DO NOT use the second DSE X Index row.
+    # Do NOT use the later historical/secondary
+    # DSE X Index row.
     # -------------------------------------------------
 
-    dse_dsex_close = None
+    dsex_close = None
 
+    for text in midrow_sections:
 
-    for index, row in enumerate(
-        dsex_rows,
-        start=1
-    ):
-
-        row_text = " ".join(row)
-
-        print(
-            f"DSE DSEX Row {index}:",
-            row_text
+        normalized = (
+            text
+            .replace("\xa0", " ")
+            .strip()
         )
 
+        if normalized.startswith(
+            "DSE X Index "
+        ):
 
-    # -------------------------------------------------
-    # 5.4 EXTRACT OFFICIAL DSEX CLOSE
-    # -------------------------------------------------
+            parts = normalized.split()
 
-    if len(dsex_rows) > 0:
+            # Expected:
+            #
+            # parts[0] = DSE
+            # parts[1] = X
+            # parts[2] = 5655.68313
+            # parts[3] = 15.59485
+            # parts[4] = 0.2765%
 
-        first_dsex_row = dsex_rows[0]
+            if len(parts) >= 3:
 
-        row_text = " ".join(
-            first_dsex_row
-        )
+                candidate = parts[2]
 
-        # -------------------------------------------------
-        # Expected structure:
-        #
-        # DSE X Index
-        # 5655.68313
-        # 15.59485
-        # 0.2765%
-        #
-        # Extract numeric values after DSE X Index.
-        # -------------------------------------------------
+                try:
 
-        numeric_values = []
+                    dsex_close = float(
+                        candidate
+                    )
 
-        for token in row_text.split():
+                    print()
+                    print(
+                        "Official DSEX row found:"
+                    )
 
-            cleaned = (
-                token
-                .replace(",", "")
-                .replace("%", "")
-            )
+                    print(
+                        "DSE X Index:",
+                        normalized
+                    )
 
-            try:
+                    print(
+                        "DSEX Close:",
+                        dsex_close
+                    )
 
-                value = float(cleaned)
+                    break
 
-                numeric_values.append(
-                    value
-                )
+                except (
+                    ValueError,
+                    TypeError
+                ):
 
-            except ValueError:
-
-                continue
-
-
-        if len(numeric_values) >= 1:
-
-            dse_dsex_close = (
-                numeric_values[0]
-            )
+                    continue
 
 
     # -------------------------------------------------
-    # 5.5 VALIDATE DSEX CLOSE
+    # 5.8 VALIDATE DSEX CLOSE
     # -------------------------------------------------
 
-    if dse_dsex_close is None:
+    if dsex_close is None:
 
         raise RuntimeError(
             "DSE DSEX CLOSE NOT FOUND"
         )
 
 
-    if dse_dsex_close <= 0:
+    if dsex_close <= 0:
 
         raise RuntimeError(
-            f"INVALID DSE DSEX CLOSE: "
-            f"{dse_dsex_close}"
+            f"Invalid DSEX Close: "
+            f"{dsex_close}"
         )
 
 
-    print()
-    print(
-        "DSE DSEX Close:",
-        dse_dsex_close
-    )
-
-
     # -------------------------------------------------
-    # 5.6 FIND OFFICIAL DSE TOTAL VOLUME
+    # 5.9 FIND OFFICIAL DSE TOTAL VOLUME
     # -------------------------------------------------
-
-    dse_total_volume = None
-
-    for row in dse_rows:
-
-        # We do not use this row for volume.
-        # Volume is located in the general DSE
-        # market summary section.
-
-        pass
-
-
-    # -------------------------------------------------
-    # Search the page for:
+    #
+    # The first Total Trade section in the page is
+    # the current official market session:
     #
     # Total Trade
     # Total Volume
     # Total Value in Taka (mn)
     #
-    # Example:
-    #
     # 147461
     # 177465534
     # 4670.148
+    #
+    # Therefore:
+    #
+    # Total Volume = 177465534
     # -------------------------------------------------
 
-    for index, row in enumerate(
-        dse_rows
+    dse_total_volume = None
+
+    for i, text in enumerate(
+        midrow_sections
     ):
 
-        row_text = " ".join(row)
+        normalized = (
+            text
+            .replace("\xa0", " ")
+            .strip()
+        )
 
         if (
-            "Total Trade" in row_text
-            and "Total Volume" in row_text
+            "Total Trade" in normalized
+            and
+            "Total Volume" in normalized
         ):
 
-            if (
-                index + 1
-                < len(dse_rows)
+            # Look forward for the numeric
+            # values belonging to this section.
+
+            for j in range(
+                i + 1,
+                min(
+                    i + 5,
+                    len(midrow_sections)
+                )
             ):
 
-                value_row = dse_rows[
-                    index + 1
-                ]
+                value_text = (
+                    midrow_sections[j]
+                    .replace("\xa0", " ")
+                    .strip()
+                )
 
-                numeric_values = []
-
-                for token in value_row:
-
-                    cleaned = (
-                        token
-                        .replace(",", "")
-                        .strip()
-                    )
-
-                    try:
-
-                        value = float(
-                            cleaned
-                        )
-
-                        numeric_values.append(
-                            value
-                        )
-
-                    except ValueError:
-
-                        continue
-
+                parts = value_text.split()
 
                 # Expected:
-                #
-                # Total Trade
-                # Total Volume
-                # Total Value
                 #
                 # 147461
                 # 177465534
                 # 4670.148
-                #
-                # Therefore:
-                #
-                # numeric_values[0] = trades
-                # numeric_values[1] = volume
-                # numeric_values[2] = value
 
-                if len(
-                    numeric_values
-                ) >= 2:
+                if len(parts) >= 3:
 
-                    candidate_volume = (
-                        numeric_values[1]
-                    )
+                    try:
 
-                    if candidate_volume > 0:
-
-                        dse_total_volume = int(
-                            candidate_volume
+                        trade_count = int(
+                            float(parts[0])
                         )
 
-                        break
-
-
-    # -------------------------------------------------
-    # 5.7 FALLBACK VOLUME SEARCH
-    # -------------------------------------------------
-
-    if dse_total_volume is None:
-
-        # Search all rows for the known
-        # Total Volume summary pattern.
-
-        for index, row in enumerate(
-            dse_rows
-        ):
-
-            row_text = " ".join(row)
-
-            if "Total Volume" in row_text:
-
-                if (
-                    index + 1
-                    < len(dse_rows)
-                ):
-
-                    next_row = dse_rows[
-                        index + 1
-                    ]
-
-                    numeric_values = []
-
-                    for token in next_row:
-
-                        cleaned = (
-                            token
-                            .replace(",", "")
-                            .strip()
+                        volume = int(
+                            float(parts[1])
                         )
 
-                        try:
+                        value_mn = float(
+                            parts[2]
+                        )
 
-                            value = float(
-                                cleaned
+                        if (
+                            trade_count >= 0
+                            and
+                            volume >= 0
+                            and
+                            value_mn >= 0
+                        ):
+
+                            dse_total_volume = volume
+
+                            print()
+                            print(
+                                "DSE Total Trade:",
+                                trade_count
                             )
 
-                            numeric_values.append(
-                                value
+                            print(
+                                "DSE Total Volume:",
+                                dse_total_volume
                             )
 
-                        except ValueError:
-
-                            continue
-
-
-                    if len(
-                        numeric_values
-                    ) >= 2:
-
-                        candidate_volume = (
-                            numeric_values[1]
-                        )
-
-                        if candidate_volume > 0:
-
-                            dse_total_volume = int(
-                                candidate_volume
+                            print(
+                                "DSE Total Value (mn):",
+                                value_mn
                             )
 
                             break
 
+                    except (
+                        ValueError,
+                        TypeError
+                    ):
+
+                        continue
+
+            if dse_total_volume is not None:
+
+                break
+
 
     # -------------------------------------------------
-    # 5.8 VALIDATE VOLUME
+    # 5.10 VALIDATE DSE VOLUME
     # -------------------------------------------------
 
     if dse_total_volume is None:
@@ -2382,115 +2253,77 @@ try:
         )
 
 
-    if dse_total_volume <= 0:
+    if dse_total_volume < 0:
 
         raise RuntimeError(
-            f"INVALID DSE TOTAL VOLUME: "
+            f"Invalid DSE Total Volume: "
             f"{dse_total_volume}"
         )
 
+
+    # -------------------------------------------------
+    # 5.11 PRINT FINAL DSEX DATA
+    # -------------------------------------------------
+
+    print()
+    print(
+        "DSE DSEX Close:",
+        dsex_close
+    )
 
     print(
         "DSE Total Volume:",
         dse_total_volume
     )
 
-
-    # -------------------------------------------------
-    # 5.9 SELECT FINAL OHLC
-    #
-    # Open / High / Low:
-    #     TradingView
-    #
-    # Close:
-    #     Official DSE
-    #
-    # Volume:
-    #     Official DSE
-    # -------------------------------------------------
-
-    final_open = tv_open
-    final_high = tv_high
-    final_low = tv_low
-
-    # If TradingView failed, use DSE close
-    # for all missing OHLC values.
-
-    if final_open is None:
-
-        final_open = dse_dsex_close
-
-    if final_high is None:
-
-        final_high = dse_dsex_close
-
-    if final_low is None:
-
-        final_low = dse_dsex_close
-
-
-    final_close = dse_dsex_close
-
-    final_volume = dse_total_volume
-
-
-    # -------------------------------------------------
-    # 5.10 FINAL VALIDATION
-    # -------------------------------------------------
-
-    final_values = [
-        final_open,
-        final_high,
-        final_low,
-        final_close,
-        final_volume
-    ]
-
-    for value in final_values:
-
-        if value is None:
-
-            raise RuntimeError(
-                "DSEX FINAL VALUE IS NONE"
-            )
-
-
-    if (
-        final_open <= 0
-        or final_high <= 0
-        or final_low <= 0
-        or final_close <= 0
-        or final_volume <= 0
-    ):
-
-        raise RuntimeError(
-            "INVALID DSEX FINAL VALUES"
-        )
-
-
-    # -------------------------------------------------
-    # 5.11 CREATE DSEX ROW
-    # -------------------------------------------------
-
-    dsex_row = [
-        "DSEX",
-        official_dse_date,
-        round(float(final_open), 2),
-        round(float(final_high), 2),
-        round(float(final_low), 2),
-        round(float(final_close), 2),
-        int(final_volume)
-    ]
-
-
-    # -------------------------------------------------
-    # 5.12 DISPLAY FINAL DSEX ROW
-    # -------------------------------------------------
-
     print()
     print(
         "DSEX data collected successfully"
     )
+
+
+    # -------------------------------------------------
+    # 5.12 CREATE DSEX ROW
+    # -------------------------------------------------
+    #
+    # Final format:
+    #
+    # Ticker
+    # Date
+    # Open
+    # High
+    # Low
+    # Close
+    # Volume
+    #
+    # DSEX Close comes from OFFICIAL DSE.
+    # OHLC comes from TradingView.
+    # Volume comes from OFFICIAL DSE.
+    # -------------------------------------------------
+
+    dsex_row = [
+        "DSEX",
+        dse_official_date,
+        float(tv_dsex_open),
+        float(tv_dsex_high),
+        float(tv_dsex_low),
+        float(dsex_close),
+        int(dse_total_volume)
+    ]
+
+
+    # -------------------------------------------------
+    # 5.13 APPEND DSEX TO COMBINED DATA
+    # -------------------------------------------------
+
+    combined_rows.append(
+        dsex_row
+    )
+
+
+    # -------------------------------------------------
+    # 5.14 PRINT FINAL DSEX ROW
+    # -------------------------------------------------
 
     print()
     print(
@@ -2533,38 +2366,19 @@ try:
     )
 
 
-    # -------------------------------------------------
-    # 5.13 APPEND DSEX TO COMBINED DATA
-    # -------------------------------------------------
-
-    combined_rows.append(
-        dsex_row
-    )
-
-
-    print()
-    print(
-        "DSEX appended successfully."
-    )
-
-
 except Exception as e:
 
     print()
-    print("=" * 70)
-    print("DSEX COLLECTION FAILED")
-    print("=" * 70)
+    print(
+        "ERROR: DSEX collection failed"
+    )
 
     print(
-        "ERROR:",
+        "Error:",
         str(e)
     )
 
-    raise RuntimeError(
-        "DSEX collection failed"
-    ) from e
-
-
+    raise
 
     # =====================================================
     # 6. RETURN ROW
