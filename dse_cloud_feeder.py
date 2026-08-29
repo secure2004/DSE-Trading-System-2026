@@ -787,49 +787,58 @@ def scrape_dse_latest_prices(
     )
 
 
-    # =====================================================
-    # REMOVE INVALID CLOSE
-    # =====================================================
+# =====================================================
+# CLEAN DATA
+# =====================================================
 
-    df = df[
-        df["Close"] > 0
-    ]
+for col in [
+    "Open",
+    "High",
+    "Low",
+    "Close"
+]:
+    df[col] = df[col].apply(
+        safe_float
+    )
 
-
-    # =====================================================
-    # VALID SYMBOLS
-    # =====================================================
-
-    df = df[
-        df["Ticker"]
-        .astype(str)
-        .str.match(
-            r"^[A-Z0-9]+$"
-        )
-    ]
+df["Volume"] = df["Volume"].apply(
+    safe_int
+)
 
 
-    # =====================================================
-    # CRITICAL EMPTY-DATA PROTECTION
-    # =====================================================
+# =====================================================
+# VALID SYMBOLS
+# =====================================================
 
-    if df.empty:
+df = df[
+    df["Ticker"]
+    .astype(str)
+    .str.match(
+        r"^[A-Z0-9]+$"
+    )
+]
 
-        logging.error(
-            "DSE returned zero valid symbols"
-        )
 
-        print()
-        print(
-            "ERROR: DSE RETURNED ZERO VALID SYMBOLS"
-        )
+# =====================================================
+# CRITICAL EMPTY-DATA PROTECTION
+# =====================================================
 
-        print(
-            "DSE DATA WILL NOT BE WRITTEN."
-        )
+if df.empty:
 
-        return False
+    logging.error(
+        "DSE returned zero valid symbols"
+    )
 
+    print()
+    print(
+        "ERROR: DSE RETURNED ZERO VALID SYMBOLS"
+    )
+
+    print(
+        "DSE DATA WILL NOT BE WRITTEN."
+    )
+
+    return False
 
     # =====================================================
     # DATE
