@@ -1868,7 +1868,7 @@ def write_combined_csv(
     return True
 
 
-```python
+
 # =========================================================
 # PART 5: APPEND DSEX
 #
