@@ -1914,7 +1914,6 @@ def write_combined_csv(
 
 def append_dsex_index():
 
-```
 print()
 print("=" * 70)
 print("5. APPENDING DSEX")
