@@ -2245,115 +2245,117 @@ def append_dsex_index():
                         )
 
 
-        # =================================================
-        # 2C. DSEX CLOSE
-        # =================================================
-        #
-        # If two DSE X Index values are available:
-        #
-        # [live/current, closing]
-        #
-        # use the SECOND value.
-        #
-        # If only one exists, use that value.
-        #
-        # =================================================
+# =================================================
+# 2C. DSEX CLOSE
+# =================================================
+#
+# DSE homepage provides two DSE X Index rows:
+#
+# FIRST  = current/live DSEX
+# SECOND = final/closing DSEX
+#
+# Example:
+#
+# DSE Midrow 1:
+# DSE X Index 5655.68313 15.59485 0.2765%
+#
+# DSE Midrow 8:
+# DSE X Index 5640.08828 -3.48147 -0.06169%
+#
+# Therefore:
+#
+# DSEX CLOSE = SECOND DSE X INDEX VALUE
+#
+# =================================================
 
-        dse_close = 0.0
-
-
-        if len(dsex_values) >= 2:
-
-            dse_close = dsex_values[-1]
-
-        elif len(dsex_values) == 1:
-
-            dse_close = dsex_values[0]
-
-
-        # =================================================
-        # FALLBACK: RAW HTML
-        # =================================================
-
-        if dse_close <= 0:
-
-            try:
-
-                dsex_matches = re.findall(
-
-                    r"DSE\s+X\s+Index"
-                    r".{0,500}?"
-                    r"([0-9][0-9,]*\.[0-9]+)",
-
-                    html,
-
-                    re.IGNORECASE
-                )
+dse_close = 0.0
 
 
-                fallback_values = []
+if len(dsex_values) >= 2:
+
+    # ---------------------------------------------
+    # FINAL/CLOSING DSEX
+    # ---------------------------------------------
+
+    dse_close = dsex_values[1]
+
+    print()
+    print(
+        "DSEX Values Found:",
+        dsex_values
+    )
+
+    print(
+        "DSEX Close Source: SECOND DSE X INDEX"
+    )
+
+    print(
+        "DSEX Live/Current:",
+        dsex_values[0]
+    )
+
+    print(
+        "DSEX Final/Close:",
+        dse_close
+    )
 
 
-                for value_text in dsex_matches:
+elif len(dsex_values) == 1:
 
-                    candidate = safe_float(
-                        value_text
-                    )
+    # ---------------------------------------------
+    # FALLBACK
+    #
+    # Only one DSE X Index row was found.
+    # Use it, but make the fallback explicit.
+    # ---------------------------------------------
 
+    dse_close = dsex_values[0]
 
-                    if (
-                        candidate > 1000
-                        and
-                        candidate < 20000
-                    ):
+    print()
+    print(
+        "WARNING: Only one DSE X Index value found"
+    )
 
-                        fallback_values.append(
-                            candidate
-                        )
-
-
-                if len(fallback_values) >= 2:
-
-                    dse_close = fallback_values[-1]
-
-                elif len(fallback_values) == 1:
-
-                    dse_close = fallback_values[0]
+    print(
+        "DSEX Close Fallback:",
+        dse_close
+    )
 
 
-            except Exception as e:
+else:
 
-                logging.warning(
-                    f"DSEX raw HTML fallback failed: {e}"
-                )
-
-
-        # =================================================
-        # FINAL DSEX CLOSE VALIDATION
-        # =================================================
-
-        if dse_close <= 0:
-
-            print()
-            print(
-                "ERROR: DSE DSEX CLOSE NOT FOUND"
-            )
-
-            logging.error(
-                "DSE DSEX close not found"
-            )
-
-            return False
+    print()
+    print(
+        "ERROR: No DSE X Index values found"
+    )
 
 
-        print()
-        print(
-            "DSE DSEX Close:",
-            round(
-                dse_close,
-                2
-            )
-        )
+# =================================================
+# FINAL DSEX CLOSE VALIDATION
+# =================================================
+
+if dse_close <= 0:
+
+    logging.error(
+        "DSE DSEX close not found"
+    )
+
+    print()
+    print(
+        "ERROR: DSE DSEX CLOSE NOT FOUND"
+    )
+
+    return False
+
+
+print()
+print(
+    "DSE DSEX Close:",
+    round(
+        dse_close,
+        5
+    )
+)
 
 
         # =================================================
