@@ -2142,7 +2142,7 @@ def append_dsex_index():
             dsex_pattern = re.compile(
                 r"DSE\s*"
                 r"(?:<[^>]+>\s*)?"
-                r*X
+                r"X"
                 r"(?:</[^>]+>\s*)?"
                 r"Index",
                 re.IGNORECASE
