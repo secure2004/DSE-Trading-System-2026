@@ -2130,43 +2130,36 @@ def append_dsex_index():
         # =================================================
         # METHOD 1
         #
-        # Search HTML for:
-        #
-        # DSE X Index
-        #
-        # and inspect nearby HTML.
+        # Search raw HTML around "DSEX Index"
         # =================================================
 
-        try:
+        dse_close = 0.0
 
-            dsex_pattern = re.compile(
-                r"DSE\s*"
-                r"(?:<[^>]+>\s*)?"
-                r*X
-                r"(?:</[^>]+>\s*)?"
-                r"Index",
+        dsex_positions = [
+            m.start()
+            for m in re.finditer(
+                r"DSEX",
+                html,
                 re.IGNORECASE
             )
+        ]
 
-            dsex_match = dsex_pattern.search(
-                html
-            )
+        print()
+        print(
+            "DSEX HTML occurrences:",
+            len(dsex_positions)
+        )
 
-        except Exception:
-
-            dsex_match = None
-
-
-        if dsex_match:
+        for position in dsex_positions:
 
             start_pos = max(
                 0,
-                dsex_match.start() - 3000
+                position - 500
             )
 
             end_pos = min(
                 len(html),
-                dsex_match.end() + 5000
+                position + 5000
             )
 
             dsex_context = html[
@@ -2174,43 +2167,33 @@ def append_dsex_index():
             ]
 
             # ---------------------------------------------
-            # Look for m_col-2 values
+            # Extract all numeric values from nearby HTML
             # ---------------------------------------------
 
-            value_matches = re.findall(
-
-                r'<div\s+class=["\']'
-                r'[^"\']*m_col-2[^"\']*'
-                r'["\'][^>]*>'
-                r'\s*'
-                r'([0-9][0-9,\.\s]*)'
-                r'\s*'
-                r'</div>',
-
-                dsex_context,
-
-                re.IGNORECASE
+            numbers = re.findall(
+                r"\b\d{3,5}\.\d{1,5}\b",
+                dsex_context
             )
 
-
-            for value_text in value_matches:
+            for number_text in numbers:
 
                 candidate = safe_float(
-                    value_text
+                    number_text
                 )
 
-                # DSEX index is normally in this range.
+                # DSEX index range
                 if (
-                    candidate > 1000
+                    candidate >= 1000
                     and
-                    candidate < 20000
+                    candidate <= 20000
                 ):
 
                     dse_close = candidate
-
                     break
 
-
+            if dse_close > 0:
+                break
+        
         # =================================================
         # METHOD 2
         #
