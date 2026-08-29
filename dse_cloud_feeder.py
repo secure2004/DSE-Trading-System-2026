@@ -1868,6 +1868,7 @@ def write_combined_csv(
     return True
 
 
+```python
 # =========================================================
 # PART 5: APPEND DSEX
 #
@@ -1878,7 +1879,12 @@ def write_combined_csv(
 # DSEX VOLUME -> DSE Website Total Volume
 # DSEX DATE   -> DSE Website "Last update on"
 #
+# IMPORTANT:
+# DSE website HTML structure can change.
+# Therefore DSEX CLOSE and VOLUME use multiple
+# extraction methods.
 # =========================================================
+
 
 def append_dsex_index():
 
@@ -1886,7 +1892,6 @@ def append_dsex_index():
     print("=" * 70)
     print("5. APPENDING DSEX")
     print("=" * 70)
-
 
     # =====================================================
     # 1. GET DSEX OHLC FROM TRADINGVIEW
@@ -1901,27 +1906,24 @@ def append_dsex_index():
             interval=Interval.INTERVAL_1_DAY
         )
 
-
         analysis = handler.get_analysis()
 
         ind = analysis.indicators
 
-
         tv_open = round(
-            ind.get("open", 0),
+            float(ind.get("open", 0)),
             2
         )
 
         tv_high = round(
-            ind.get("high", 0),
+            float(ind.get("high", 0)),
             2
         )
 
         tv_low = round(
-            ind.get("low", 0),
+            float(ind.get("low", 0)),
             2
         )
-
 
         print()
         print("TradingView DSEX OHLC:")
@@ -1940,7 +1942,6 @@ def append_dsex_index():
             "Low  :",
             tv_low
         )
-
 
         # -------------------------------------------------
         # VALIDATE TRADINGVIEW DATA
@@ -1964,7 +1965,6 @@ def append_dsex_index():
             )
 
             return False
-
 
     except Exception as e:
 
@@ -1998,7 +1998,6 @@ def append_dsex_index():
         response.raise_for_status()
 
         html = response.text
-
 
         print()
         print(
@@ -2036,13 +2035,12 @@ def append_dsex_index():
         # =================================================
         # 2A. GET OFFICIAL DSE DATE
         #
-        # Example:
+        # SOURCE:
         #
         # Last update on Aug 25, 2026 at 2:40 PM
         #
-        # Result:
-        #
-        # 2026-08-25
+        # IMPORTANT:
+        # This date is the master DSE trading date.
         # =================================================
 
         date_match = re.search(
@@ -2093,7 +2091,6 @@ def append_dsex_index():
                 DATE_FMT
             )
 
-
         except ValueError:
 
             dse_date = datetime.strptime(
@@ -2117,122 +2114,97 @@ def append_dsex_index():
 
 
         # =================================================
-        # 2B. FIND DSEX CLOSE
+        # 2B. DSEX CLOSE
         #
-        # ACTUAL DSE HTML:
+        # IMPORTANT:
         #
-        # <div class="midrow">
+        # Current DSE HTML may not expose the DSEX row
+        # through BeautifulSoup's expected structure.
         #
-        #   <div class="m_col-1">
-        #       DSE<font size="+1">X</font> Index
-        #   </div>
-        #
-        #   <div class="m_col-2">
-        #       5722.21464
-        #   </div>
-        #
-        # </div>
-        #
-        # We therefore:
-        #
-        # 1. Find m_col-1
-        # 2. Convert its HTML to text
-        # 3. Check for "DSEX Index"
-        # 4. Find parent midrow
-        # 5. Find m_col-2
+        # Therefore several methods are attempted.
         # =================================================
 
         dse_close = 0.0
 
-        dsex_rows_found = 0
+
+        # =================================================
+        # METHOD 1
+        #
+        # Search HTML for:
+        #
+        # DSE X Index
+        #
+        # and inspect nearby HTML.
+        # =================================================
+
+        try:
+
+            dsex_pattern = re.compile(
+                r"DSE\s*"
+                r"(?:<[^>]+>\s*)?"
+                r*X
+                r"(?:</[^>]+>\s*)?"
+                r"Index",
+                re.IGNORECASE
+            )
+
+            dsex_match = dsex_pattern.search(
+                html
+            )
+
+        except Exception:
+
+            dsex_match = None
 
 
-        # -------------------------------------------------
-        # Find all possible index-label cells
-        # -------------------------------------------------
+        if dsex_match:
 
-        label_divs = soup.find_all(
-            "div",
-            class_="m_col-1"
-        )
+            start_pos = max(
+                0,
+                dsex_match.start() - 3000
+            )
 
+            end_pos = min(
+                len(html),
+                dsex_match.end() + 5000
+            )
 
-        for label_div in label_divs:
+            dsex_context = html[
+                start_pos:end_pos
+            ]
 
-            label_text = label_div.get_text(
-                " ",
-                strip=True
+            # ---------------------------------------------
+            # Look for m_col-2 values
+            # ---------------------------------------------
+
+            value_matches = re.findall(
+
+                r'<div\s+class=["\']'
+                r'[^"\']*m_col-2[^"\']*'
+                r'["\'][^>]*>'
+                r'\s*'
+                r'([0-9][0-9,\.\s]*)'
+                r'\s*'
+                r'</div>',
+
+                dsex_context,
+
+                re.IGNORECASE
             )
 
 
-            # Normalize spaces
-            label_text = " ".join(
-                label_text.split()
-            )
-
-
-            # -------------------------------------------------
-            # Check DSEX
-            # -------------------------------------------------
-
-            if label_text.upper() == "DSEX INDEX":
-
-                dsex_rows_found += 1
-
-
-                # ---------------------------------------------
-                # Find containing row
-                # ---------------------------------------------
-
-                parent_row = label_div.find_parent(
-                    "div",
-                    class_="midrow"
-                )
-
-
-                if parent_row is None:
-
-                    continue
-
-
-                # ---------------------------------------------
-                # Find value cell
-                # ---------------------------------------------
-
-                value_div = parent_row.find(
-                    "div",
-                    class_="m_col-2"
-                )
-
-
-                if value_div is None:
-
-                    continue
-
-
-                value_text = value_div.get_text(
-                    " ",
-                    strip=True
-                )
-
-
-                value_text = value_text.replace(
-                    ",",
-                    ""
-                )
-
-
-                value_text = " ".join(
-                    value_text.split()
-                )
-
+            for value_text in value_matches:
 
                 candidate = safe_float(
                     value_text
                 )
 
-
-                if candidate > 0:
+                # DSEX index is normally in this range.
+                if (
+                    candidate > 1000
+                    and
+                    candidate < 20000
+                ):
 
                     dse_close = candidate
 
@@ -2240,36 +2212,18 @@ def append_dsex_index():
 
 
         # =================================================
-        # DEBUG INFORMATION
-        # =================================================
-
-        print()
-        print(
-            "DSEX label rows found:",
-            dsex_rows_found
-        )
-
-
-        # =================================================
-        # FALLBACK:
+        # METHOD 2
         #
-        # Some DSE versions may not use exactly
-        # class="midrow".
-        #
-        # Search all m_col-1 parents.
+        # Find "DSEX Index" using BeautifulSoup and
+        # inspect parent elements.
         # =================================================
 
         if dse_close <= 0:
 
-            print()
-            print(
-                "DSEX STRUCTURAL SEARCH FAILED"
+            label_divs = soup.find_all(
+                "div",
+                class_="m_col-1"
             )
-
-            print(
-                "Trying fallback DSEX extraction..."
-            )
-
 
             for label_div in label_divs:
 
@@ -2278,63 +2232,221 @@ def append_dsex_index():
                     strip=True
                 )
 
-
                 label_text = " ".join(
                     label_text.split()
                 )
 
-
-                if label_text.upper() != "DSEX INDEX":
+                if (
+                    label_text.upper()
+                    !=
+                    "DSEX INDEX"
+                ):
 
                     continue
 
 
-                # ---------------------------------------------
-                # Search parent hierarchy
-                # ---------------------------------------------
+                # -----------------------------------------
+                # Try nearest midrow
+                # -----------------------------------------
 
-                current = label_div.parent
-
-
-                for _ in range(6):
-
-                    if current is None:
-
-                        break
+                parent_row = label_div.find_parent(
+                    "div",
+                    class_="midrow"
+                )
 
 
-                    value_div = current.find(
+                if parent_row is not None:
+
+                    value_div = parent_row.find(
                         "div",
                         class_="m_col-2"
                     )
 
-
                     if value_div is not None:
 
-                        value_text = value_div.get_text(
-                            " ",
-                            strip=True
-                        )
-
-
                         candidate = safe_float(
-                            value_text
+                            value_div.get_text(
+                                " ",
+                                strip=True
+                            )
                         )
 
-
-                        if candidate > 0:
+                        if (
+                            candidate > 1000
+                            and
+                            candidate < 20000
+                        ):
 
                             dse_close = candidate
 
                             break
 
 
-                    current = current.parent
+        # =================================================
+        # METHOD 3
+        #
+        # Generic HTML text extraction.
+        #
+        # Search text around "DSEX Index".
+        # =================================================
+
+        if dse_close <= 0:
+
+            try:
+
+                page_text = soup.get_text(
+                    " ",
+                    strip=True
+                )
+
+                page_text = " ".join(
+                    page_text.split()
+                )
+
+                dsex_text_match = re.search(
+
+                    r"DSEX\s+Index"
+                    r".{0,500}?"
+                    r"([0-9]{3,5}\.[0-9]{1,5})",
+
+                    page_text,
+
+                    re.IGNORECASE
+                )
 
 
-                if dse_close > 0:
+                if dsex_text_match:
 
-                    break
+                    candidate = safe_float(
+                        dsex_text_match.group(1)
+                    )
+
+                    if (
+                        candidate > 1000
+                        and
+                        candidate < 20000
+                    ):
+
+                        dse_close = candidate
+
+
+            except Exception as e:
+
+                logging.warning(
+                    f"DSEX text extraction failed: {e}"
+                )
+
+
+        # =================================================
+        # METHOD 4
+        #
+        # Search known DSEX index page.
+        #
+        # The main DSE page can contain navigation
+        # references instead of the actual index data.
+        # =================================================
+
+        if dse_close <= 0:
+
+            try:
+
+                dsex_response = session.get(
+
+                    "https://www.dsebd.org/dseX_share.php",
+
+                    headers=DSE_HEADERS,
+
+                    timeout=30,
+
+                    verify=False
+                )
+
+                if dsex_response.status_code == 200:
+
+                    dsex_html = (
+                        dsex_response.text
+                    )
+
+                    dsex_soup = BeautifulSoup(
+                        dsex_html,
+                        "html.parser"
+                    )
+
+
+                    # -------------------------------------
+                    # Search m_col-2
+                    # -------------------------------------
+
+                    value_divs = dsex_soup.find_all(
+                        "div",
+                        class_="m_col-2"
+                    )
+
+
+                    for value_div in value_divs:
+
+                        candidate = safe_float(
+                            value_div.get_text(
+                                " ",
+                                strip=True
+                            )
+                        )
+
+                        if (
+                            candidate > 1000
+                            and
+                            candidate < 20000
+                        ):
+
+                            dse_close = candidate
+
+                            break
+
+
+                    # -------------------------------------
+                    # Raw HTML fallback
+                    # -------------------------------------
+
+                    if dse_close <= 0:
+
+                        value_matches = re.findall(
+
+                            r'<div\s+class=["\']'
+                            r'[^"\']*m_col-2[^"\']*'
+                            r'["\'][^>]*>'
+                            r'\s*'
+                            r'([0-9][0-9,\.\s]*)'
+                            r'\s*'
+                            r'</div>',
+
+                            dsex_html,
+
+                            re.IGNORECASE
+                        )
+
+
+                        for value_text in value_matches:
+
+                            candidate = safe_float(
+                                value_text
+                            )
+
+                            if (
+                                candidate > 1000
+                                and
+                                candidate < 20000
+                            ):
+
+                                dse_close = candidate
+
+                                break
+
+
+            except Exception as e:
+
+                logging.warning(
+                    f"DSEX dedicated page extraction failed: {e}"
+                )
 
 
         # =================================================
@@ -2365,15 +2477,20 @@ def append_dsex_index():
         # =================================================
         # 2C. GET TOTAL VOLUME
         #
-        # DSE HTML:
+        # PRIMARY:
         #
-        # <div class="m_col-wid1 colorlight">
-        #     250250134
-        # </div>
+        # m_col-wid1 colorlight
+        #
+        # FALLBACK:
+        # Raw HTML.
         # =================================================
 
         dse_volume = 0
 
+
+        # -------------------------------------------------
+        # METHOD 1: BeautifulSoup
+        # -------------------------------------------------
 
         volume_div = soup.find(
             "div",
@@ -2384,6 +2501,7 @@ def append_dsex_index():
         if volume_div is not None:
 
             dse_volume = safe_int(
+
                 volume_div.get_text(
                     " ",
                     strip=True
@@ -2391,19 +2509,23 @@ def append_dsex_index():
             )
 
 
-        # =================================================
-        # FALLBACK VOLUME SEARCH
-        # =================================================
+        # -------------------------------------------------
+        # METHOD 2: Raw HTML
+        # -------------------------------------------------
 
         if dse_volume <= 0:
 
             volume_matches = re.findall(
 
                 r'<div\s+class=["\']'
-                r'm_col-wid1\s+colorlight'
+                r'[^"\']*m_col-wid1[^"\']*'
+                r'colorlight'
+                r'[^"\']*'
                 r'["\'][^>]*>'
-                r'\s*([0-9][0-9,\.\s]*)'
-                r'\s*</div>',
+                r'\s*'
+                r'([0-9][0-9,\.\s]*)'
+                r'\s*'
+                r'</div>',
 
                 html,
 
@@ -2417,7 +2539,6 @@ def append_dsex_index():
                     value_text
                 )
 
-
                 if candidate > 0:
 
                     dse_volume = candidate
@@ -2425,8 +2546,49 @@ def append_dsex_index():
                     break
 
 
+        # -------------------------------------------------
+        # METHOD 3: Search Total Volume text
+        # -------------------------------------------------
+
+        if dse_volume <= 0:
+
+            try:
+
+                volume_text_match = re.search(
+
+                    r"Total\s+Volume"
+                    r".{0,500}?"
+                    r"([0-9][0-9,\.\s]{5,})",
+
+                    soup.get_text(
+                        " ",
+                        strip=True
+                    ),
+
+                    re.IGNORECASE
+                )
+
+
+                if volume_text_match:
+
+                    candidate = safe_int(
+                        volume_text_match.group(1)
+                    )
+
+                    if candidate > 0:
+
+                        dse_volume = candidate
+
+
+            except Exception as e:
+
+                logging.warning(
+                    f"Total volume text extraction failed: {e}"
+                )
+
+
         # =================================================
-        # VALIDATE VOLUME
+        # FINAL VOLUME VALIDATION
         # =================================================
 
         if dse_volume <= 0:
@@ -2483,30 +2645,59 @@ def append_dsex_index():
         dse_close,
 
         dse_volume
+
     ]
 
 
     # =====================================================
-    # 4. RETURN DSEX ROW
-    #
-    # Cloud version does NOT write DSEX separately.
-    # The caller validates DSE + SME + DSEX and then writes
-    # ONE final daily CSV atomically.
+    # 4. DISPLAY FINAL DSEX ROW
     # =====================================================
 
     print()
-    print("DSEX data collected successfully")
+    print(
+        "DSEX data collected successfully"
+    )
 
     print()
-    print("Final DSEX Row:")
+    print(
+        "Final DSEX Row:"
+    )
 
-    print("Ticker :", row[0])
-    print("Date   :", row[1])
-    print("Open   :", row[2])
-    print("High   :", row[3])
-    print("Low    :", row[4])
-    print("Close  :", row[5])
-    print("Volume :", row[6])
+    print(
+        "Ticker :",
+        row[0]
+    )
+
+    print(
+        "Date   :",
+        row[1]
+    )
+
+    print(
+        "Open   :",
+        row[2]
+    )
+
+    print(
+        "High   :",
+        row[3]
+    )
+
+    print(
+        "Low    :",
+        row[4]
+    )
+
+    print(
+        "Close  :",
+        row[5]
+    )
+
+    print(
+        "Volume :",
+        row[6]
+    )
+
 
     logging.info(
         "DSEX collected successfully | "
@@ -2518,7 +2709,10 @@ def append_dsex_index():
         f"Volume={dse_volume}"
     )
 
+
     return row
+```
+
 
 
 # =========================================================
