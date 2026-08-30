@@ -1,3 +1,4 @@
+```yaml
 name: DSE Daily EOD
 
 on:
@@ -30,9 +31,26 @@ jobs:
       - name: Run DSE feeder
         run: python dse_cloud_feeder.py
 
+      - name: Move generated data to DSEX
+        run: |
+          echo "Moving generated DSE data..."
+
+          mkdir -p DSEX
+
+          if [ -d "data" ]; then
+            cp -R data/. DSEX/
+            rm -rf data
+          else
+            echo "ERROR: data directory was not created."
+            exit 1
+          fi
+
       - name: Show generated files
         run: |
-          echo "Generated CSV files:"
+          echo "========================================"
+          echo "DSEX ARCHIVE"
+          echo "========================================"
+
           find DSEX -type f -name "*.csv" -print | sort
 
       - name: Commit daily archive
@@ -40,7 +58,7 @@ jobs:
           git config user.name "DSE Daily Feeder"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          echo "Adding generated CSV files..."
+          echo "Adding DSEX CSV files..."
 
           find DSEX -type f -name "*.csv" -print0 | xargs -0 -r git add -f
 
@@ -50,3 +68,4 @@ jobs:
             git commit -m "DSE EOD data $(date -u +%Y-%m-%d)"
             git push
           fi
+```
