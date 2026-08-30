@@ -1,44 +1,89 @@
 name: DSE Daily EOD
 
 on:
-  workflow_dispatch:
-  schedule:
-    # 14:35 Bangladesh time = 08:35 UTC
-    # Sunday-Thursday (DSE trading days)
-    - cron: "35 8 * * 0-4"
+workflow_dispatch:
+
+schedule:
+# 14:40 Bangladesh time = 08:40 UTC
+# Run every day.
+#
+# The Python feeder's DSE official-date gate
+# decides whether today is an actual DSE trading day.
+- cron: "40 8 * * *"
 
 permissions:
-  contents: write
+contents: write
 
 jobs:
-  download:
-    runs-on: ubuntu-latest
+download:
+runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: "pip"
+steps:
+  # =====================================================
+  # 1. CHECKOUT
+  # =====================================================
 
-      - name: Install dependencies
-        run: python -m pip install -r requirements.txt
+  - name: Checkout repository
+    uses: actions/checkout@v4
 
-      - name: Run DSE feeder
-        run: python dse_cloud_feeder.py
 
-      - name: Show generated files
-        run: |
-          echo "Generated files:"
-          find data -type f -maxdepth 4 -print | sort
+  # =====================================================
+  # 2. SETUP PYTHON
+  # =====================================================
 
-      - name: Commit daily archive
-        run: |
-          git config user.name "DSE Daily Feeder"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data dse_data_feeder.log
-          git diff --cached --quiet || git commit -m "DSE EOD data $(date -u +%Y-%m-%d)"
-          git push
+  - name: Set up Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: "3.12"
+      cache: "pip"
+
+
+  # =====================================================
+  # 3. INSTALL DEPENDENCIES
+  # =====================================================
+
+  - name: Install dependencies
+    run: |
+      python -m pip install --upgrade pip
+      python -m pip install -r requirements.txt
+
+
+  # =====================================================
+  # 4. RUN DSE FEEDER
+  # =====================================================
+
+  - name: Run DSE feeder
+    run: python dse_cloud_feeder.py
+
+
+  # =====================================================
+  # 5. SHOW GENERATED FILES
+  # =====================================================
+
+  - name: Show generated files
+    run: |
+      echo "Generated CSV files:"
+      find data -type f -name "*.csv" -print | sort
+
+
+  # =====================================================
+  # 6. COMMIT DAILY CSV DATA
+  # =====================================================
+
+  - name: Commit daily archive
+    run: |
+      git config user.name "DSE Daily Feeder"
+      git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # Add only CSV files.
+      # The ignored dse_data_feeder.log is deliberately excluded.
+      find data -type f -name "*.csv" -print0 | xargs -0 -r git add -f
+
+      if git diff --cached --quiet; then
+        echo "No new CSV files to commit."
+      else
+        git commit -m "DSE EOD data $(date -u +%Y-%m-%d)"
+        git push
+      fi
+
