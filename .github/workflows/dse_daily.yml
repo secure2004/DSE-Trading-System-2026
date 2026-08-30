@@ -42,7 +42,7 @@ jobs:
 
       - name: Publish DSEX data to public repository
         env:
-          DSEX_DATA_TOKEN: ${{ secrets.DSEX_DATA_TOKEN }}
+          DSEX_DATA_TOKEN: ${{ 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 }}
         run: |
           set -e
 
