@@ -1,118 +1,124 @@
 name: DSE Daily EOD
 
 on:
-  workflow_dispatch:
+workflow_dispatch:
 
-  schedule:
-    # 14:30 Bangladesh time (UTC+6)
-    # = 08:30 UTC
-    #
-    # Sunday-Thursday
-    - cron: "30 8 * * 0-4"
+schedule:
+# 14:40 Bangladesh time (UTC+6)
+# = 08:40 UTC
+#
+# Run every day so exceptional DSE trading days
+# (for example, a Saturday opened for Eid adjustment)
+# are not missed.
+#
+# The Python feeder's DSE official-date gate is
+# the final authority on whether data is collected.
+- cron: "40 8 * * *"
 
 permissions:
-  contents: write
+contents: write
 
 jobs:
 
-  download:
+download:
 
-    runs-on: ubuntu-latest
+```
+runs-on: ubuntu-latest
 
-    steps:
+steps:
 
-      # =====================================================
-      # 1. CHECKOUT
-      # =====================================================
+  # =====================================================
+  # 1. CHECKOUT
+  # =====================================================
 
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
-
-      # =====================================================
-      # 2. SETUP PYTHON
-      # =====================================================
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-
-        with:
-          python-version: "3.12"
-          cache: "pip"
+  - name: Checkout repository
+    uses: actions/checkout@v5
 
 
-      # =====================================================
-      # 3. INSTALL DEPENDENCIES
-      # =====================================================
+  # =====================================================
+  # 2. SETUP PYTHON
+  # =====================================================
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-
-
-      # =====================================================
-      # 4. RUN DSE FEEDER
-      # =====================================================
-
-      - name: Run DSE feeder
-        run: |
-          python dse_cloud_feeder.py
+  - name: Set up Python
+    uses: actions/setup-python@v6
+    with:
+      python-version: "3.12"
+      cache: "pip"
 
 
-      # =====================================================
-      # 5. SHOW GENERATED FILES
-      # =====================================================
+  # =====================================================
+  # 3. INSTALL DEPENDENCIES
+  # =====================================================
 
-      - name: Show generated files
-        run: |
-          echo "========================================"
-          echo "GENERATED DSE DATA FILES"
-          echo "========================================"
-
-          if [ -d "data" ]; then
-            find data -type f -print | sort
-          else
-            echo "ERROR: data directory was not created."
-            exit 1
-          fi
+  - name: Install dependencies
+    run: |
+      python -m pip install --upgrade pip
+      python -m pip install -r requirements.txt
 
 
-      # =====================================================
-      # 6. COMMIT DAILY DATA
-      # =====================================================
+  # =====================================================
+  # 4. RUN DSE FEEDER
+  # =====================================================
 
-      - name: Commit daily archive
-        run: |
-
-          git config user.name "DSE Daily Feeder"
-
-          git config user.email \
-            "41898282+github-actions[bot]@users.noreply.github.com"
+  - name: Run DSE feeder
+    run: |
+      python dse_cloud_feeder.py
 
 
-          # -------------------------------------------------
-          # Add only daily DSE data.
-          #
-          # dse_data_feeder.log remains ignored.
-          # -------------------------------------------------
+  # =====================================================
+  # 5. SHOW GENERATED FILES
+  # =====================================================
 
-          git add data
+  - name: Show generated files
+    run: |
+      echo "========================================"
+      echo "GENERATED DSE DATA FILES"
+      echo "========================================"
+
+      if [ -d "data" ]; then
+        find data -type f -print | sort
+      else
+        echo "ERROR: data directory was not created."
+        exit 1
+      fi
 
 
-          # -------------------------------------------------
-          # Commit only when data changed.
-          # -------------------------------------------------
+  # =====================================================
+  # 6. COMMIT DAILY DATA
+  # =====================================================
 
-          if git diff --cached --quiet; then
+  - name: Commit daily archive
+    run: |
 
-            echo "No new files to commit."
+      git config user.name "DSE Daily Feeder"
 
-          else
+      git config user.email \
+        "41898282+github-actions[bot]@users.noreply.github.com"
 
-            git commit \
-              -m "DSE EOD data $(date -u +%Y-%m-%d)"
 
-            git push
+      # -------------------------------------------------
+      # Add only daily DSE data.
+      #
+      # dse_data_feeder.log remains ignored.
+      # -------------------------------------------------
 
-          fi
+      git add data
+
+
+      # -------------------------------------------------
+      # Commit only when data changed.
+      # -------------------------------------------------
+
+      if git diff --cached --quiet; then
+
+        echo "No new files to commit."
+
+      else
+
+        git commit \
+          -m "DSE EOD data $(date -u +%Y-%m-%d)"
+
+        git push
+
+      fi
+```
