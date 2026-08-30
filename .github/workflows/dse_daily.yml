@@ -42,14 +42,14 @@ jobs:
 
       - name: Publish DSEX data to public repository
         env:
-          DSEX_DATA_TOKEN: ${{ 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 }}
+          DSEX_DATA_TOKEN: ${{ secrets.DSEX_DATA_TOKEN }}
         run: |
           set -e
 
           echo "Preparing public DSEX repository..."
 
           git clone \
-            "https://x-access-token:${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}@github.com/secure2004/DSEX-DATA.git" \
+            "https://x-access-token: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@github.com/secure2004/DSEX-DATA.git" \
             public-data
 
           echo "Copying generated DSE data..."
