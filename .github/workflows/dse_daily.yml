@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout private repository
         uses: actions/checkout@v5
 
       - name: Set up Python
@@ -30,40 +30,46 @@ jobs:
       - name: Run DSE feeder
         run: python dse_cloud_feeder.py
 
-      - name: Move generated data to DSEX
+      - name: Verify generated data
         run: |
-          echo "Moving generated DSE data..."
+          echo "Generated CSV files:"
+          find data -type f -name "*.csv" -print | sort
 
-          mkdir -p DSEX
-
-          if [ -d "data" ]; then
-            cp -R data/. DSEX/
-            rm -rf data
-          else
-            echo "ERROR: data directory was not created."
+          if ! find data -type f -name "*.csv" | grep -q .; then
+            echo "ERROR: No CSV files were generated."
             exit 1
           fi
 
-      - name: Show generated files
+      - name: Publish DSEX data to public repository
+        env:
+          DSEX_DATA_TOKEN: ${{ secrets.DSEX_DATA_TOKEN }}
         run: |
-          echo "========================================"
-          echo "DSEX ARCHIVE"
-          echo "========================================"
+          set -e
 
-          find DSEX -type f -name "*.csv" -print | sort
+          echo "Preparing public DSEX repository..."
 
-      - name: Commit daily archive
-        run: |
+          git clone \
+            "https://x-access-token:${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}@github.com/secure2004/DSEX-DATA.git" \
+            public-data
+
+          echo "Copying generated DSE data..."
+
+          mkdir -p public-data/DSEX
+          cp -R data/. public-data/DSEX/
+
+          cd public-data
+
           git config user.name "DSE Daily Feeder"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          echo "Adding DSEX CSV files..."
+          echo "Public repository files:"
+          find DSEX -type f -name "*.csv" -print | sort
 
-          find DSEX -type f -name "*.csv" -print0 | xargs -0 -r git add -f
+          git add DSEX
 
           if git diff --cached --quiet; then
-            echo "No new CSV files to commit."
+            echo "No new DSEX data to publish."
           else
             git commit -m "DSE EOD data $(date -u +%Y-%m-%d)"
-            git push
+            git push origin main
           fi
