@@ -8,11 +8,11 @@ schedule:
 # = 08:40 UTC
 #
 # Run every day so exceptional DSE trading days
-# (for example, a Saturday opened for Eid adjustment)
+# such as a Saturday opened for Eid adjustment
 # are not missed.
 #
-# The Python feeder's DSE official-date gate is
-# the final authority on whether data is collected.
+# The Python feeder's DSE official-date gate
+# is the final authority on whether data is collected.
 - cron: "40 8 * * *"
 
 permissions:
@@ -21,10 +21,9 @@ contents: write
 jobs:
 
 download:
-
-```
 runs-on: ubuntu-latest
 
+```
 steps:
 
   # =====================================================
@@ -97,7 +96,7 @@ steps:
 
 
       # -------------------------------------------------
-      # Add only daily DSE data.
+      # Add daily DSE data.
       #
       # dse_data_feeder.log remains ignored.
       # -------------------------------------------------
