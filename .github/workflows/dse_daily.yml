@@ -33,7 +33,7 @@ jobs:
       - name: Show generated files
         run: |
           echo "Generated CSV files:"
-          find data -type f -name "*.csv" -print | sort
+          find DSEX -type f -name "*.csv" -print | sort
 
       - name: Commit daily archive
         run: |
@@ -42,7 +42,7 @@ jobs:
 
           echo "Adding generated CSV files..."
 
-          find data -type f -name "*.csv" -print0 | xargs -0 -r git add -f
+          find DSEX -type f -name "*.csv" -print0 | xargs -0 -r git add -f
 
           if git diff --cached --quiet; then
             echo "No new CSV files to commit."
