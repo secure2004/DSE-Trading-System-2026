@@ -1,21 +1,16 @@
 name: DSE Daily EOD
-
 on:
 workflow_dispatch:
 schedule:
 - cron: "40 8 * * *"
-
 permissions:
 contents: write
-
 jobs:
 download:
 runs-on: ubuntu-latest
 steps:
 - name: Checkout repository
 uses: actions/checkout@v5
-
-
   - name: Set up Python
     uses: actions/setup-python@v6
     with:
