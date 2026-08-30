@@ -1,4 +1,3 @@
-```yaml
 name: DSE Daily EOD
 
 on:
@@ -68,4 +67,3 @@ jobs:
             git commit -m "DSE EOD data $(date -u +%Y-%m-%d)"
             git push
           fi
-```
