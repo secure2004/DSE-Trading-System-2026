@@ -1,0 +1,62 @@
+```yaml
+name: Publish Existing DSEX Data
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout private repository
+        uses: actions/checkout@v5
+
+      - name: Check existing CSV
+        run: |
+          echo "Checking existing DSE data..."
+
+          find data -type f -name "*.csv" -print | sort
+
+          if ! find data -type f -name "*.csv" | grep -q .; then
+            echo "ERROR: No CSV files found."
+            exit 1
+          fi
+
+      - name: Publish DSEX data to public repository
+        env:
+          DSEX_DATA_TOKEN: ${{ secrets.DSEX_DATA_TOKEN }}
+        run: |
+          set -e
+
+          echo "Cloning public DSEX repository..."
+
+          git clone \
+            "https://x-access-token:${DSEX_DATA_TOKEN}@github.com/secure2004/DSEX-DATA.git" \
+            public-data
+
+          echo "Copying existing DSE data..."
+
+          mkdir -p public-data/DSEX
+          cp -R data/. public-data/DSEX/
+
+          cd public-data
+
+          git config user.name "DSE Daily Feeder"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          echo "Files to publish:"
+          find DSEX -type f -name "*.csv" -print | sort
+
+          git add DSEX
+
+          if git diff --cached --quiet; then
+            echo "No new DSEX data to publish."
+          else
+            git commit -m "Publish existing DSE EOD data"
+            git push origin main
+          fi
+```
