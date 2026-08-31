@@ -49,7 +49,7 @@ jobs:
           echo "Preparing public DSEX repository..."
 
           git clone \
-            "https://x-access-token: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@github.com/secure2004/DSEX-DATA.git" \
+            "https://x-access-token:${DSEX_DATA_TOKEN}@github.com/secure2004/DSEX-DATA.git" \
             public-data
 
           echo "Copying generated DSE data..."
