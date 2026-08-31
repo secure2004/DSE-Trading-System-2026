@@ -2,19 +2,32 @@ name: DSE Daily EOD
 
 on:
   workflow_dispatch:
+
   schedule:
+    # 14:40 Bangladesh time = 08:40 UTC
+    # Run every day.
     - cron: "40 8 * * *"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   download:
     runs-on: ubuntu-latest
 
     steps:
+
+      # =====================================================
+      # 1. CHECKOUT PRIVATE REPOSITORY
+      # =====================================================
+
       - name: Checkout private repository
         uses: actions/checkout@v5
+
+
+      # =====================================================
+      # 2. SETUP PYTHON
+      # =====================================================
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -22,13 +35,29 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
+
+      # =====================================================
+      # 3. INSTALL DEPENDENCIES
+      # =====================================================
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
+
+      # =====================================================
+      # 4. RUN PRIVATE DSE FEEDER
+      # =====================================================
+
       - name: Run DSE feeder
-        run: python dse_cloud_feeder.py
+        run: |
+          python dse_cloud_feeder.py
+
+
+      # =====================================================
+      # 5. VERIFY GENERATED DATA
+      # =====================================================
 
       - name: Verify generated data
         run: |
@@ -40,21 +69,30 @@ jobs:
             exit 1
           fi
 
-      - name: Publish DSEX data to public repository
+
+      # =====================================================
+      # 6. PUBLISH DATA TO PUBLIC DSEX REPOSITORY
+      # =====================================================
+
+      - name: Publish DSEX data
         env:
           DSEX_DATA_TOKEN: ${{ secrets.DSEX_DATA_TOKEN }}
+
         run: |
           set -e
 
-          echo "Preparing public DSEX repository..."
+          echo "========================================"
+          echo "PUBLISHING DSE DATA"
+          echo "========================================"
 
           git clone \
             "https://x-access-token:${DSEX_DATA_TOKEN}@github.com/secure2004/DSEX-DATA.git" \
             public-data
 
-          echo "Copying generated DSE data..."
+          echo "Copying generated data..."
 
           mkdir -p public-data/DSEX
+
           cp -R data/. public-data/DSEX/
 
           cd public-data
@@ -62,14 +100,27 @@ jobs:
           git config user.name "DSE Daily Feeder"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          echo "Public repository files:"
+          echo "========================================"
+          echo "PUBLIC DSEX FILES"
+          echo "========================================"
+
           find DSEX -type f -name "*.csv" -print | sort
+
+          echo "========================================"
+          echo "COMMITTING DATA"
+          echo "========================================"
 
           git add DSEX
 
           if git diff --cached --quiet; then
             echo "No new DSEX data to publish."
           else
-            git commit -m "DSE EOD data $(date -u +%Y-%m-%d)"
+            git commit \
+              -m "DSE EOD data $(date -u +%Y-%m-%d)"
+
             git push origin main
           fi
+
+          echo "========================================"
+          echo "DSEX PUBLICATION COMPLETE"
+          echo "========================================"
