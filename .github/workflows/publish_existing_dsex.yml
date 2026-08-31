@@ -1,4 +1,3 @@
-```yaml
 name: Publish Existing DSEX Data
 
 on:
@@ -59,4 +58,3 @@ jobs:
             git commit -m "Publish existing DSE EOD data"
             git push origin main
           fi
-```
