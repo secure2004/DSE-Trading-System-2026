@@ -37,7 +37,7 @@ jobs:
 
 
       # =====================================================
-      # 3. INSTALL DEPENDENCIES
+      # 3. INSTALL PYTHON DEPENDENCIES
       # =====================================================
 
       - name: Install dependencies
@@ -59,7 +59,7 @@ jobs:
       # 5. VERIFY GENERATED DATA
       # =====================================================
 
-      - name: Verify generated data
+      - name: Verify generated CSV data
         run: |
           echo "Generated CSV files:"
           find data -type f -name "*.csv" -print | sort
@@ -71,56 +71,39 @@ jobs:
 
 
       # =====================================================
-      # 6. PUBLISH DATA TO PUBLIC DSEX REPOSITORY
+      # 6. INSTALL CLOUDFLARE WRANGLER
       # =====================================================
 
-      - name: Publish DSEX data
+      - name: Install Wrangler
+        run: |
+          npm install -g wrangler
+
+
+      # =====================================================
+      # 7. PUBLISH ONLY DATA TO CLOUDFLARE PAGES
+      # =====================================================
+
+      - name: Publish DSEX data to Cloudflare Pages
         env:
-          DSEX_DATA_TOKEN: ${{ secrets.DSEX_DATA_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
         run: |
           set -e
 
           echo "========================================"
-          echo "PUBLISHING DSE DATA"
+          echo "PUBLISHING DSEX DATA TO CLOUDFLARE"
           echo "========================================"
 
-          git clone \
-            "https://x-access-token:${DSEX_DATA_TOKEN}@github.com/secure2004/DSEX-DATA.git" \
-            public-data
+          echo "Cloudflare Pages project: dsex-data"
 
-          echo "Copying generated data..."
+          echo "Files being published:"
+          find data -type f -name "*.csv" -print | sort
 
-          mkdir -p public-data/DSEX
-
-          cp -R data/. public-data/DSEX/
-
-          cd public-data
-
-          git config user.name "DSE Daily Feeder"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          wrangler pages deploy data \
+            --project-name=dsex-data \
+            --branch=main
 
           echo "========================================"
-          echo "PUBLIC DSEX FILES"
-          echo "========================================"
-
-          find DSEX -type f -name "*.csv" -print | sort
-
-          echo "========================================"
-          echo "COMMITTING DATA"
-          echo "========================================"
-
-          git add DSEX
-
-          if git diff --cached --quiet; then
-            echo "No new DSEX data to publish."
-          else
-            git commit \
-              -m "DSE EOD data $(date -u +%Y-%m-%d)"
-
-            git push origin main
-          fi
-
-          echo "========================================"
-          echo "DSEX PUBLICATION COMPLETE"
+          echo "CLOUDFLARE PUBLICATION COMPLETE"
           echo "========================================"
