@@ -4,12 +4,11 @@ on:
   workflow_dispatch:
 
   schedule:
-    # 14:40 Bangladesh time = 08:40 UTC
-    # Run every day.
+    # 08:40 UTC = 14:40 Bangladesh time
     - cron: "40 8 * * *"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   download:
@@ -17,17 +16,17 @@ jobs:
 
     steps:
 
-      # =====================================================
+      # ============================================================
       # 1. CHECKOUT PRIVATE REPOSITORY
-      # =====================================================
+      # ============================================================
 
       - name: Checkout private repository
         uses: actions/checkout@v5
 
 
-      # =====================================================
-      # 2. SETUP PYTHON
-      # =====================================================
+      # ============================================================
+      # 2. SET UP PYTHON
+      # ============================================================
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -36,9 +35,9 @@ jobs:
           cache: "pip"
 
 
-      # =====================================================
-      # 3. INSTALL PYTHON DEPENDENCIES
-      # =====================================================
+      # ============================================================
+      # 3. INSTALL DEPENDENCIES
+      # ============================================================
 
       - name: Install dependencies
         run: |
@@ -46,22 +45,25 @@ jobs:
           python -m pip install -r requirements.txt
 
 
-      # =====================================================
+      # ============================================================
       # 4. RUN PRIVATE DSE FEEDER
-      # =====================================================
+      # ============================================================
 
       - name: Run DSE feeder
         run: |
           python dse_cloud_feeder.py
 
 
-      # =====================================================
-      # 5. VERIFY GENERATED DATA
-      # =====================================================
+      # ============================================================
+      # 5. VERIFY NEW CSV
+      # ============================================================
 
-      - name: Verify generated CSV data
+      - name: Verify generated CSV
         run: |
-          echo "Generated CSV files:"
+          echo "========================================"
+          echo "GENERATED DSE DATA"
+          echo "========================================"
+
           find data -type f -name "*.csv" -print | sort
 
           if ! find data -type f -name "*.csv" | grep -q .; then
@@ -70,20 +72,201 @@ jobs:
           fi
 
 
-      # =====================================================
-      # 6. INSTALL CLOUDFLARE WRANGLER
-      # =====================================================
+      # ============================================================
+      # 6. BUILD COMPLETE PUBLIC CLOUDFLARE SITE
+      # ============================================================
+
+      - name: Build public Cloudflare site
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "BUILDING PUBLIC CLOUDFLARE SITE"
+          echo "========================================"
+
+          rm -rf public
+          mkdir -p public/DSEX
+
+          # --------------------------------------------------------
+          # Copy existing archived DSEX files from private repo
+          # --------------------------------------------------------
+
+          if [ -d "DSEX" ]; then
+            echo "Copying existing DSEX archive..."
+            cp -R DSEX/. public/DSEX/
+          else
+            echo "No existing DSEX archive found."
+          fi
+
+          # --------------------------------------------------------
+          # Copy today's newly generated data
+          # --------------------------------------------------------
+
+          echo "Copying new DSE data..."
+
+          cp -R data/. public/DSEX/
+
+          # --------------------------------------------------------
+          # Show complete public archive
+          # --------------------------------------------------------
+
+          echo ""
+          echo "Public CSV files:"
+          find public/DSEX -type f -name "*.csv" -print | sort
+
+
+      # ============================================================
+      # 7. GENERATE AUTOMATIC HOMEPAGE
+      # ============================================================
+
+      - name: Generate public homepage
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "GENERATING HOMEPAGE"
+          echo "========================================"
+
+          python - <<'PY'
+          from pathlib import Path
+          from html import escape
+
+          root = Path("public")
+          dsex = root / "DSEX"
+
+          csv_files = sorted(
+              dsex.rglob("DSE_EOD_*.csv"),
+              reverse=True
+          )
+
+          rows = []
+
+          for file in csv_files:
+              relative = file.relative_to(root).as_posix()
+              filename = file.name
+
+              rows.append(
+                  f'''
+                  <a class="file"
+                     href="/{escape(relative)}">
+                      {escape(filename)}
+                  </a>
+                  '''
+              )
+
+          if rows:
+              files_html = "\n".join(rows)
+          else:
+              files_html = """
+              <p>No DSE data files are currently available.</p>
+              """
+
+          html = f"""<!DOCTYPE html>
+          <html lang="en">
+          <head>
+              <meta charset="UTF-8">
+              <meta name="viewport"
+                    content="width=device-width, initial-scale=1.0">
+
+              <title>DSEX Daily Market Data</title>
+
+              <style>
+                  body {{
+                      font-family: Arial, sans-serif;
+                      max-width: 900px;
+                      margin: 0 auto;
+                      padding: 40px 20px;
+                      background: #f5f7fa;
+                      color: #222;
+                  }}
+
+                  .container {{
+                      background: white;
+                      padding: 30px;
+                      border-radius: 10px;
+                      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+                  }}
+
+                  h1 {{
+                      margin-top: 0;
+                  }}
+
+                  .description {{
+                      color: #555;
+                  }}
+
+                  .file {{
+                      display: block;
+                      padding: 14px 16px;
+                      margin: 10px 0;
+                      background: #f1f3f5;
+                      border-radius: 6px;
+                      text-decoration: none;
+                      color: #0366d6;
+                  }}
+
+                  .file:hover {{
+                      background: #e9ecef;
+                  }}
+
+                  footer {{
+                      margin-top: 30px;
+                      font-size: 13px;
+                      color: #777;
+                  }}
+              </style>
+          </head>
+
+          <body>
+
+          <div class="container">
+
+              <h1>DSEX Daily Market Data</h1>
+
+              <p class="description">
+                  Daily Bangladesh stock market data archive including
+                  DSE stocks, SME securities, DSEX, DSES and DS30
+                  index data.
+              </p>
+
+              <h2>Available Data</h2>
+
+              {files_html}
+
+              <footer>
+                  Daily DSE market data archive.
+                  <br>
+                  Total files: {len(csv_files)}
+              </footer>
+
+          </div>
+
+          </body>
+          </html>
+          """
+
+          (root / "index.html").write_text(
+              html,
+              encoding="utf-8"
+          )
+
+          print(f"Homepage generated with {len(csv_files)} CSV files.")
+
+
+      # ============================================================
+      # 8. INSTALL WRANGLER
+      # ============================================================
 
       - name: Install Wrangler
         run: |
           npm install -g wrangler
 
 
-      # =====================================================
-      # 7. PUBLISH ONLY DATA TO CLOUDFLARE PAGES
-      # =====================================================
+      # ============================================================
+      # 9. DEPLOY COMPLETE SITE TO CLOUDFLARE PAGES
+      # ============================================================
 
-      - name: Publish DSEX data to Cloudflare Pages
+      - name: Publish complete site to Cloudflare Pages
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -92,18 +275,56 @@ jobs:
           set -e
 
           echo "========================================"
-          echo "PUBLISHING DSEX DATA TO CLOUDFLARE"
+          echo "DEPLOYING TO CLOUDFLARE PAGES"
           echo "========================================"
 
-          echo "Cloudflare Pages project: dsex-data"
+          echo "Cloudflare project:"
+          echo "dsex-data"
 
-          echo "Files being published:"
-          find data -type f -name "*.csv" -print | sort
+          echo ""
+          echo "Files being deployed:"
+          find public -type f -print | sort
 
-          wrangler pages deploy data \
+          echo ""
+          echo "Deploying..."
+
+          npx wrangler pages deploy public \
             --project-name=dsex-data \
             --branch=main
 
+          echo ""
           echo "========================================"
-          echo "CLOUDFLARE PUBLICATION COMPLETE"
+          echo "CLOUDFLARE DEPLOYMENT COMPLETE"
           echo "========================================"
+
+
+      # ============================================================
+      # 10. SAVE NEW CSV INTO PRIVATE REPOSITORY ARCHIVE
+      # ============================================================
+      #
+      # This keeps the historical archive available to future
+      # GitHub Actions runs. The repository remains PRIVATE.
+      #
+      # ============================================================
+
+      - name: Update private DSE archive
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "UPDATING PRIVATE DSE ARCHIVE"
+          echo "========================================"
+
+          cp -R data/. DSEX/
+
+          git config user.name "DSE Daily Feeder"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add DSEX
+
+          if git diff --cached --quiet; then
+            echo "No new private archive files to commit."
+          else
+            git commit -m "DSE EOD data $(date -u +%Y-%m-%d)"
+            git push
+          fi
