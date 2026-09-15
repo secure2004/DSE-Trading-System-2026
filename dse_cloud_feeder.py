@@ -161,9 +161,8 @@ def find_column(columns, candidates):
 
 
 def valid_ticker(value):
-    return bool(
-        re.fullmatch(r"[A-Z0-9]+", str(value).strip().upper())
-    )
+    ticker = str(value).strip().upper()
+    return bool(ticker)
 
 
 # ================================================================
@@ -418,6 +417,8 @@ def scrape_dse_day_end_archive(trading_date, sme_tickers):
         ticker = values[ticker_pos].strip().upper()
 
         if not valid_ticker(ticker):
+            logging.warning("Skipped invalid DSE ticker: %r", ticker)
+            print("WARNING: Skipped invalid DSE ticker:", repr(ticker))
             continue
 
         # If the page supplies a date, verify that it is the
