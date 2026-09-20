@@ -1,8 +1,10 @@
-# ================================================================
+from pathlib import Path
+
+code = r'''# ================================================================
 # DSE + SME + DSEX / DSES / DS30 DAILY EOD CLOUD DATA FEEDER
 # ================================================================
 #
-# AGREED DESIGN
+# DESIGN
 #
 # START
 #   -> Current Bangladesh local date
@@ -27,6 +29,7 @@
 # NO:
 #   - TradingView
 #   - tradingview_ta
+#   - lxml dependency
 #   - intraday DSE stock source
 #   - 09:30 reset block
 #   - HTS/holiday lookup
@@ -42,6 +45,7 @@ import logging
 import re
 import sys
 import time
+import urllib3
 from datetime import datetime, time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -52,15 +56,46 @@ from bs4 import BeautifulSoup
 
 
 # ================================================================
+# SSL WARNING CONTROL
+# ================================================================
+#
+# DSE / SME / LankaBangla are accessed with verify=False because
+# the existing feeder environment requires it.
+#
+# This suppresses only urllib3's console warning. It does NOT
+# change the actual HTTPS request behavior.
+# ================================================================
+
+urllib3.disable_warnings(
+    urllib3.exceptions.InsecureRequestWarning
+)
+
+
+# ================================================================
 # CONFIGURATION
 # ================================================================
 
 PROJECT_DIR = Path(__file__).resolve().parent
+
+# GitHub/cloud repository layout:
+#   repository/
+#       dse_cloud_feeder.py
+#       data/
+#           YYYY/
+#               MM/
+#                   DSE_EOD_YYYY-MM-DD.csv
 DATA_DIR = PROJECT_DIR / "data"
+
 LOG_FILE = PROJECT_DIR / "dse_data_feeder.log"
 
-DSE_INDEX_URL = "https://www.dsebd.org/index.php"
-DSE_ARCHIVE_URL = "https://www.dsebd.org/day_end_archive.php"
+DSE_INDEX_URL = (
+    "https://www.dsebd.org/index.php"
+)
+
+DSE_ARCHIVE_URL = (
+    "https://www.dsebd.org/day_end_archive.php"
+)
+
 SME_HTML_URL = (
     "https://sme.dsebd.org/"
     "sme_latest_share_price_scroll_by_ltp.php"
@@ -71,9 +106,11 @@ LANKABANGLA_PRICEFILE_URL = (
 )
 
 BD_TZ = ZoneInfo("Asia/Dhaka")
+
 DATE_FMT = "%Y-%m-%d"
 
 FEED_TIME = dt_time(14, 40)
+
 RETRY_TIME = dt_time(14, 45)
 
 MAX_ATTEMPTS = 2
@@ -108,13 +145,20 @@ LANKABANGLA_HEADERS = {
 }
 
 
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR.mkdir(
+    parents=True,
+    exist_ok=True,
+)
 
 
 logging.basicConfig(
     filename=str(LOG_FILE),
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format=(
+        "%(asctime)s - "
+        "%(levelname)s - "
+        "%(message)s"
+    ),
 )
 
 
@@ -124,7 +168,11 @@ logging.basicConfig(
 
 def safe_float(value):
     try:
-        s = str(value).strip().replace(",", "")
+        s = (
+            str(value)
+            .strip()
+            .replace(",", "")
+        )
 
         if s in (
             "",
@@ -145,7 +193,11 @@ def safe_float(value):
 
 def safe_int(value):
     try:
-        s = str(value).strip().replace(",", "")
+        s = (
+            str(value)
+            .strip()
+            .replace(",", "")
+        )
 
         if s in (
             "",
@@ -165,7 +217,11 @@ def safe_int(value):
 
 
 def clean_text(value):
-    return re.sub(r"\s+", " ", str(value).strip())
+    return re.sub(
+        r"\s+",
+        " ",
+        str(value).strip(),
+    )
 
 
 def norm(value):
@@ -181,7 +237,10 @@ def today_bd():
 
 
 def find_column(columns, candidates):
-    normalized = {norm(c): c for c in columns}
+    normalized = {
+        norm(c): c
+        for c in columns
+    }
 
     for candidate in candidates:
         key = norm(candidate)
@@ -190,17 +249,21 @@ def find_column(columns, candidates):
             return normalized[key]
 
     for col in columns:
-        c = norm(col)
+        col_norm = norm(col)
 
         for candidate in candidates:
-            if norm(candidate) in c:
+            if norm(candidate) in col_norm:
                 return col
 
     return None
 
 
 def valid_ticker(value):
-    ticker = str(value).strip().upper()
+    ticker = (
+        str(value)
+        .strip()
+        .upper()
+    )
 
     return bool(ticker)
 
@@ -227,7 +290,11 @@ def get_dse_official_date():
 
         response.raise_for_status()
 
-        print("DSE Date URL:", DSE_INDEX_URL)
+        print(
+            "DSE Date URL:",
+            DSE_INDEX_URL,
+        )
+
         print(
             "DSE Date Response:",
             len(response.content),
@@ -252,7 +319,10 @@ def get_dse_official_date():
 
         parsed = None
 
-        for fmt in ("%B %d %Y", "%b %d %Y"):
+        for fmt in (
+            "%B %d %Y",
+            "%b %d %Y",
+        ):
 
             try:
 
@@ -297,6 +367,7 @@ def get_dse_official_date():
 def date_gate_only():
 
     current_date = today_bd()
+
     dse_date = get_dse_official_date()
 
     print()
@@ -655,9 +726,10 @@ def scrape_dse_day_end_archive(
 
         if date_pos is not None:
 
-            row_date = values[
-                date_pos
-            ].strip()
+            row_date = (
+                values[date_pos]
+                .strip()
+            )
 
             if (
                 row_date
@@ -1169,6 +1241,8 @@ def combine_dse_sme(
 
     before = len(combined)
 
+    # If a source unexpectedly overlaps,
+    # SME is authoritative.
     combined.drop_duplicates(
         subset=["Ticker"],
         keep="last",
@@ -1229,9 +1303,7 @@ def combine_dse_sme(
 # 4. LANKABANGLA DSEX / DSES / DS30
 # ================================================================
 
-def get_lankabangla_indices(
-    trading_date,
-):
+def get_lankabangla_indices(trading_date):
 
     print()
     print("=" * 70)
@@ -1270,32 +1342,55 @@ def get_lankabangla_indices(
             "bytes",
         )
 
-        tables = pd.read_html(
-            response.text
+        # IMPORTANT:
+        # Do NOT use pd.read_html().
+        # GitHub Actions may not have lxml.
+        # BeautifulSoup is already installed/required.
+
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser",
         )
 
-        if not tables:
+        tables = soup.find_all("table")
 
-            raise RuntimeError(
-                "LankaBangla PriceFile "
-                "contains no tables"
-            )
+        print(
+            "LankaBangla Tables Found:",
+            len(tables),
+        )
 
-        df = None
+        target = None
+
+        # Find table by its headers.
+        # Do not depend on a fixed table number.
 
         for table in tables:
 
-            columns = [
-                clean_text(c)
-                for c in table.columns
+            rows = table.find_all("tr")
+
+            if not rows:
+                continue
+
+            header_cells = rows[0].find_all(
+                ["th", "td"]
+            )
+
+            headers = [
+                clean_text(
+                    cell.get_text(
+                        " ",
+                        strip=True,
+                    )
+                )
+                for cell in header_cells
             ]
 
-            normalized = {
-                norm(c)
-                for c in columns
+            normalized_headers = {
+                norm(x)
+                for x in headers
             }
 
-            required = {
+            required_headers = {
                 "SYMBOL",
                 "DATE",
                 "OPEN",
@@ -1305,76 +1400,105 @@ def get_lankabangla_indices(
                 "VOLUME",
             }
 
-            if required.issubset(
-                normalized
+            if required_headers.issubset(
+                normalized_headers
             ):
 
-                df = table.copy()
-
-                df.columns = columns
-
+                target = table
                 break
 
-        if df is None:
+        if target is None:
 
             raise RuntimeError(
                 "LankaBangla PriceFile "
                 "table not found"
             )
 
-        symbol_col = find_column(
-            df.columns,
-            ["SYMBOL"],
+        rows = target.find_all("tr")
+
+        if len(rows) < 2:
+
+            raise RuntimeError(
+                "LankaBangla PriceFile "
+                "contains no data rows"
+            )
+
+        header_cells = rows[0].find_all(
+            ["th", "td"]
         )
 
-        date_col = find_column(
-            df.columns,
-            ["DATE"],
-        )
-
-        open_col = find_column(
-            df.columns,
-            ["OPEN"],
-        )
-
-        high_col = find_column(
-            df.columns,
-            ["HIGH"],
-        )
-
-        low_col = find_column(
-            df.columns,
-            ["LOW"],
-        )
-
-        close_col = find_column(
-            df.columns,
-            ["CLOSE"],
-        )
-
-        volume_col = find_column(
-            df.columns,
-            ["VOLUME"],
-        )
+        headers = [
+            clean_text(
+                cell.get_text(
+                    " ",
+                    strip=True,
+                )
+            )
+            for cell in header_cells
+        ]
 
         print(
             "LankaBangla columns:",
-            list(df.columns),
+            headers,
         )
 
-        required_columns = [
-            symbol_col,
-            date_col,
-            open_col,
-            high_col,
-            low_col,
-            close_col,
-            volume_col,
+        header_positions = {
+            norm(header): i
+            for i, header in enumerate(headers)
+        }
+
+        def header_position(*names):
+
+            for name in names:
+
+                key = norm(name)
+
+                if key in header_positions:
+                    return header_positions[key]
+
+            return None
+
+        symbol_pos = header_position(
+            "SYMBOL"
+        )
+
+        date_pos = header_position(
+            "DATE"
+        )
+
+        open_pos = header_position(
+            "OPEN"
+        )
+
+        high_pos = header_position(
+            "HIGH"
+        )
+
+        low_pos = header_position(
+            "LOW"
+        )
+
+        close_pos = header_position(
+            "CLOSE"
+        )
+
+        volume_pos = header_position(
+            "VOLUME"
+        )
+
+        required_positions = [
+            symbol_pos,
+            date_pos,
+            open_pos,
+            high_pos,
+            low_pos,
+            close_pos,
+            volume_pos,
         ]
 
         if any(
-            x is None
-            for x in required_columns
+            pos is None
+            for pos in required_positions
         ):
 
             raise RuntimeError(
@@ -1384,10 +1508,27 @@ def get_lankabangla_indices(
 
         indices = {}
 
-        for _, row in df.iterrows():
+        for row in rows[1:]:
+
+            cells = row.find_all("td")
+
+            if len(cells) <= max(
+                required_positions
+            ):
+                continue
+
+            values = [
+                clean_text(
+                    cell.get_text(
+                        " ",
+                        strip=True,
+                    )
+                )
+                for cell in cells
+            ]
 
             symbol = (
-                str(row[symbol_col])
+                values[symbol_pos]
                 .strip()
                 .upper()
             )
@@ -1399,41 +1540,47 @@ def get_lankabangla_indices(
             ):
                 continue
 
-            row_date = row[date_col]
+            row_date = (
+                values[date_pos]
+                .strip()
+            )
 
             try:
 
-                parsed_date = pd.to_datetime(
-                    row_date
-                ).strftime(DATE_FMT)
+                parsed_date = (
+                    pd.to_datetime(
+                        row_date
+                    ).strftime(
+                        DATE_FMT
+                    )
+                )
 
             except Exception:
 
-                parsed_date = str(
-                    row_date
-                ).strip()
+                parsed_date = row_date
 
             if parsed_date != trading_date:
-
                 continue
 
             indices[symbol] = {
                 "Open": safe_float(
-                    row[open_col]
+                    values[open_pos]
                 ),
                 "High": safe_float(
-                    row[high_col]
+                    values[high_pos]
                 ),
                 "Low": safe_float(
-                    row[low_col]
+                    values[low_pos]
                 ),
                 "Close": safe_float(
-                    row[close_col]
+                    values[close_pos]
                 ),
                 "Volume": safe_int(
-                    row[volume_col]
+                    values[volume_pos]
                 ),
             }
+
+        # Require all three indexes.
 
         for symbol in (
             "DSEX",
@@ -1445,7 +1592,8 @@ def get_lankabangla_indices(
 
                 raise RuntimeError(
                     f"LankaBangla {symbol} "
-                    "not found"
+                    f"not found for "
+                    f"{trading_date}"
                 )
 
             data = indices[symbol]
@@ -1461,7 +1609,8 @@ def get_lankabangla_indices(
 
                     raise RuntimeError(
                         f"Invalid LankaBangla "
-                        f"{symbol} {field}"
+                        f"{symbol} {field}: "
+                        f"{data[field]}"
                     )
 
         # LankaBangla reports the same
@@ -1469,10 +1618,14 @@ def get_lankabangla_indices(
         # three index rows.
         #
         # Keep actual market volume ONLY
-        # on DSEX to prevent duplication.
-        market_volume = indices[
-            "DSEX"
-        ]["Volume"]
+        # on DSEX.
+        #
+        # DSES and DS30 are deliberately zero
+        # to prevent duplicated market volume.
+
+        market_volume = (
+            indices["DSEX"]["Volume"]
+        )
 
         if market_volume <= 0:
 
@@ -1486,6 +1639,7 @@ def get_lankabangla_indices(
         )
 
         indices["DSES"]["Volume"] = 0
+
         indices["DS30"]["Volume"] = 0
 
         print()
@@ -1647,9 +1801,10 @@ def build_final_dataset(
                     f"{symbol} {field}"
                 )
 
-    if indices[
-        "DSEX"
-    ]["Volume"] <= 0:
+    if (
+        indices["DSEX"]["Volume"]
+        <= 0
+    ):
 
         raise RuntimeError(
             "Invalid DSEX market volume"
@@ -1774,8 +1929,7 @@ def publish_daily_csv(
     ):
 
         row = final_df[
-            final_df["Ticker"]
-            == symbol
+            final_df["Ticker"] == symbol
         ].iloc[0]
 
         print(
@@ -1851,7 +2005,7 @@ def collect_and_publish():
     trading_date = official_date
 
     # ------------------------------------------------------------
-    # SME
+    # SME source
     # ------------------------------------------------------------
 
     sme_df = scrape_sme_data(
@@ -1865,7 +2019,7 @@ def collect_and_publish():
         )
 
     # ------------------------------------------------------------
-    # DSE
+    # DSE stocks
     # ------------------------------------------------------------
 
     dse_df = (
@@ -1885,7 +2039,7 @@ def collect_and_publish():
         )
 
     # ------------------------------------------------------------
-    # Combine
+    # Combine DSE + SME
     # ------------------------------------------------------------
 
     stocks = combine_dse_sme(
@@ -1966,7 +2120,7 @@ def collect_and_publish():
     )
 
     # ------------------------------------------------------------
-    # Publish only after everything passes
+    # Publish only after all validation passes.
     # ------------------------------------------------------------
 
     daily_file = publish_daily_csv(
@@ -2021,6 +2175,7 @@ def seconds_until(time_value):
 
 def run_normal():
 
+    # Initial date gate.
     current_date = today_bd()
 
     official_date = (
@@ -2047,6 +2202,7 @@ def run_normal():
         official_date,
     )
 
+    # ONLY trading-day gate.
     if current_date != official_date:
 
         print()
@@ -2062,6 +2218,9 @@ def run_normal():
         print("No collection.")
 
         return 0
+
+    # If launched before 2:40 PM,
+    # wait until 2:40 PM.
 
     wait_seconds = seconds_until(
         FEED_TIME
@@ -2092,6 +2251,11 @@ def run_normal():
             wait_seconds
         )
 
+    # ------------------------------------------------------------
+    # Attempt 1: 2:40 PM
+    # Attempt 2: 2:45 PM if needed
+    # ------------------------------------------------------------
+
     for attempt in range(
         1,
         MAX_ATTEMPTS + 1,
@@ -2105,6 +2269,8 @@ def run_normal():
         )
 
         try:
+
+            # Re-check date immediately before collection.
 
             current_date = today_bd()
 
@@ -2227,3 +2393,10 @@ def main():
 if __name__ == "__main__":
 
     sys.exit(main())
+'''
+
+path = Path("/mnt/data/dse_cloud_feeder.py")
+path.write_text(code, encoding="utf-8")
+
+print(f"Created: {path}")
+print(f"Lines: {len(code.splitlines())}")
