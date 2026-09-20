@@ -14,8 +14,6 @@
 #   -> DSE Day End Archive: DSE stocks OHLC + Volume
 #   -> Existing SME source: SME stocks
 #   -> Combine DSE + SME
-#   -> TradingView: DSEX/DSES/DS30 Open/High/Low
-#   -> DSE website: DSEX/DSES/DS30 Close + DSEX total Volume
 #   -> Final validation
 #   -> data/YYYY/MM/DSE_EOD_YYYY-MM-DD.csv
 #
@@ -40,18 +38,10 @@ import time
 from datetime import datetime, time as dt_time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-
-# TradingView package used by the existing feeder.
-try:
-    from tradingview_ta import TA_Handler, Interval
-except ImportError:
-    TA_Handler = None
-    Interval = None
 
 
 # ================================================================
@@ -59,7 +49,7 @@ except ImportError:
 # ================================================================
 
 PROJECT_DIR = Path(__file__).resolve().parent
-DATA_DIR = PROJECT_DIR / "data"
+DATA_DIR = PROJECT_DIR.parent
 LOG_FILE = PROJECT_DIR / "dse_data_feeder.log"
 
 DSE_INDEX_URL = "https://www.dsebd.org/index.php"
@@ -420,7 +410,7 @@ def scrape_dse_day_end_archive(trading_date, sme_tickers):
             logging.warning("Skipped invalid DSE ticker: %r", ticker)
             print("WARNING: Skipped invalid DSE ticker:", repr(ticker))
             continue
-
+    
         # If the page supplies a date, verify that it is the
         # requested archive date. Rows without a usable date are
         # skipped rather than silently assigned to another day.
@@ -739,312 +729,322 @@ def combine_dse_sme(dse_df, sme_df):
     ]
 
 # ================================================================
-# 4. TRADINGVIEW INDEX O/H/L
+# 4. LANKABANGLA DSEX / DSES / DS30 INDEX DATA
 # ================================================================
 
-def get_tradingview_index_ohl(symbol):
-    if TA_Handler is None:
-        raise RuntimeError(
-            "tradingview_ta is not installed. "
-            "Install it with: pip install tradingview-ta"
-        )
-
-    handler = TA_Handler(
-        symbol=symbol,
-        exchange="DSEBD",
-        screener="bangladesh",
-        interval=Interval.INTERVAL_1_DAY,
-    )
-
-    analysis = handler.get_analysis()
-    indicators = analysis.indicators
-
-    return {
-        "Open": safe_float(indicators.get("open")),
-        "High": safe_float(indicators.get("high")),
-        "Low": safe_float(indicators.get("low")),
-    }
+LANKABANGLA_PRICEFILE_URL = (
+    "https://www.lankabd.com/Home/PriceFile?dateinp={}"
+)
 
 
-def get_tradingview_indices():
+def get_lankabangla_indices(trading_date):
     print()
     print("=" * 70)
-    print("4. TRADINGVIEW INDEX O/H/L")
+    print("4. LANKABANGLA DSEX / DSES / DS30")
     print("=" * 70)
 
-    symbols = ("DSEX", "DSES", "DS30")
-    result = {}
-
-    def fetch(symbol):
-        data = get_tradingview_index_ohl(symbol)
-
-        if any(
-            data[x] <= 0
-            for x in ("Open", "High", "Low")
-        ):
-            raise RuntimeError(
-                f"Invalid TradingView {symbol} O/H/L"
-            )
-
-        return symbol, data
+    url = LANKABANGLA_PRICEFILE_URL.format(trading_date)
 
     try:
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            futures = {
-                executor.submit(fetch, symbol): symbol
-                for symbol in symbols
-            }
+        print("LankaBangla URL:", url)
 
-            for future in as_completed(futures):
-                symbol = futures[future]
-
-                try:
-                    name, data = future.result()
-
-                    result[name] = data
-
-                    print()
-                    print(f"TradingView {name} OHLC:")
-                    print("Open :", data["Open"])
-                    print("High :", data["High"])
-                    print("Low  :", data["Low"])
-
-                except Exception as exc:
-                    logging.exception(
-                        "TradingView %s failed",
-                        symbol,
-                    )
-                    print(
-                        f"TRADINGVIEW {symbol} ERROR:",
-                        exc,
-                    )
-                    return None
-
-    except Exception as exc:
-        logging.exception(
-            "TradingView parallel collection failed"
-        )
-        print(
-            "TRADINGVIEW COLLECTION ERROR:",
-            exc,
-        )
-        return None
-
-    if set(result) != set(symbols):
-        missing = [
-            symbol
-            for symbol in symbols
-            if symbol not in result
-        ]
-
-        print(
-            "TRADINGVIEW ERROR: Missing indexes:",
-            ", ".join(missing),
-        )
-
-        return None
-
-    return {
-        symbol: result[symbol]
-        for symbol in symbols
-    }
-
-
-# ================================================================
-# 5. DSE WEBSITE INDEX CLOSES + DSEX VOLUME
-# ================================================================
-
-def parse_dse_index_data():
-    print()
-    print("=" * 70)
-    print("5. DSE WEBSITE INDEX DATA")
-    print("=" * 70)
-
-    try:
         response = requests.get(
-            DSE_INDEX_URL,
+            url,
             headers=DSE_HEADERS,
-            timeout=30,
+            timeout=45,
             verify=False,
         )
         response.raise_for_status()
 
-        html = response.text
-        soup = BeautifulSoup(html, "html.parser")
-
-        print("DSE URL:", DSE_INDEX_URL)
-        print("DSE HTTP Status:", response.status_code)
-        print("DSE Response Size:", len(response.content), "bytes")
-
-        date_match = re.search(
-            r"Last\s+update\s+on\s+"
-            r"([A-Za-z]+)\s+"
-            r"(\d{1,2}),\s+"
-            r"(\d{4})",
-            html,
-            re.IGNORECASE,
+        print("LankaBangla HTTP Status:", response.status_code)
+        print(
+            "LankaBangla Response Size:",
+            len(response.content),
+            "bytes",
         )
 
-        if not date_match:
-            raise RuntimeError("DSE official date not found")
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser",
+        )
 
-        month_name, day, year = date_match.groups()
+        table = soup.find(
+            "table",
+            id="pricefiletable",
+        )
 
-        parsed_date = None
-        for fmt in ("%B %d %Y", "%b %d %Y"):
-            try:
-                parsed_date = datetime.strptime(
-                    f"{month_name} {day} {year}",
-                    fmt,
-                )
-                break
-            except ValueError:
-                pass
-
-        if parsed_date is None:
-            raise RuntimeError("Could not parse DSE official date")
-
-        dse_date = parsed_date.strftime(DATE_FMT)
-
-        # --------------------------------------------------------
-        # Index close extraction
-        # --------------------------------------------------------
-
-        closes = {}
-
-        for row in soup.find_all("div", class_="midrow"):
-            label = row.find("div", class_="m_col-1")
-            value = row.find("div", class_="m_col-2")
-
-            if label is None or value is None:
-                continue
-
-            label_text = norm(label.get_text(" ", strip=True))
-            value_text = value.get_text(" ", strip=True)
-
-            symbol = None
-
-            if label_text == "DSE X INDEX":
-                symbol = "DSEX"
-            elif label_text == "DSE S INDEX":
-                symbol = "DSES"
-            elif label_text == "DS30 INDEX":
-                symbol = "DS30"
-
-            if symbol and symbol not in closes:
-                candidate = safe_float(value_text)
-                if candidate > 0:
-                    closes[symbol] = candidate
-
-        # Fallback structural search if midrow parsing missed one.
-        if len(closes) < 3:
-            for label in soup.find_all("div", class_="m_col-1"):
-                label_text = norm(label.get_text(" ", strip=True))
-
-                if label_text == "DSE X INDEX":
-                    symbol = "DSEX"
-                elif label_text == "DSE S INDEX":
-                    symbol = "DSES"
-                elif label_text == "DS30 INDEX":
-                    symbol = "DS30"
-                else:
-                    continue
-
-                if symbol in closes:
-                    continue
-
-                parent = label.parent
-
-                for _ in range(8):
-                    if parent is None:
-                        break
-
-                    value = parent.find(
-                        "div",
-                        class_="m_col-2",
-                    )
-
-                    if value is not None:
-                        candidate = safe_float(
-                            value.get_text(" ", strip=True)
-                        )
-                        if candidate > 0:
-                            closes[symbol] = candidate
-                            break
-
-                    parent = parent.parent
-
-        for symbol in ("DSEX", "DSES", "DS30"):
-            if closes.get(symbol, 0) <= 0:
-                raise RuntimeError(
-                    f"DSE website close not found for {symbol}"
-                )
-
-        # --------------------------------------------------------
-        # DSE total volume
-        # --------------------------------------------------------
-
-        total_volume = 0
-
-        # Prefer the first current-day total-volume block.
-        volume_rows = []
-
-        for row in soup.find_all("div", class_="midrow"):
-            text = norm(row.get_text(" ", strip=True))
-
-            if (
-                "TOTAL TRADE" in text
-                and "TOTAL VOLUME" in text
-                and "TOTAL VALUE" in text
-            ):
-                numbers = re.findall(
-                    r"\d[\d,]*(?:\.\d+)?",
-                    row.get_text(" ", strip=True),
-                )
-
-                parsed = [safe_float(x) for x in numbers]
-
-                if len(parsed) >= 3:
-                    volume_rows.append(parsed)
-
-        if volume_rows:
-            # First total block = latest/current trading block.
-            total_volume = safe_int(volume_rows[0][1])
-
-        if total_volume <= 0:
-            # Fallback to the old structural class used by the feeder.
-            nodes = soup.find_all(
-                "div",
-                class_="m_col-wid1 colorlight",
+        if table is None:
+            raise RuntimeError(
+                "LankaBangla pricefiletable not found"
             )
 
-            for node in nodes:
-                candidate = safe_int(
-                    node.get_text(" ", strip=True)
-                )
-                if candidate > 0:
-                    total_volume = candidate
-                    break
+        rows = table.find_all("tr")
 
-        if total_volume <= 0:
-            raise RuntimeError("DSE total volume not found")
+        if len(rows) < 2:
+            raise RuntimeError(
+                "LankaBangla PriceFile contains no data rows"
+            )
+
+        # --------------------------------------------------------
+        # Detect columns from the PriceFile header
+        # --------------------------------------------------------
+        header_cells = rows[0].find_all(["th", "td"])
+
+        headers = [
+            clean_text(cell.get_text(" ", strip=True))
+            for cell in header_cells
+        ]
+
+        print(
+            "LankaBangla columns:",
+            headers,
+        )
+
+        normalized_headers = [norm(x) for x in headers]
+
+        def get_position(*names):
+            for name in names:
+                key = norm(name)
+                if key in normalized_headers:
+                    return normalized_headers.index(key)
+            return None
+
+        symbol_pos = get_position("SYMBOL")
+        date_pos = get_position("DATE")
+        open_pos = get_position("OPEN")
+        high_pos = get_position("HIGH")
+        low_pos = get_position("LOW")
+        close_pos = get_position("CLOSE")
+        volume_pos = get_position("VOLUME")
+
+        required_positions = [
+            symbol_pos,
+            date_pos,
+            open_pos,
+            high_pos,
+            low_pos,
+            close_pos,
+            volume_pos,
+        ]
+
+        if any(pos is None for pos in required_positions):
+            raise RuntimeError(
+                "Required LankaBangla columns are missing"
+            )
+
+        # --------------------------------------------------------
+        # Extract only DSEX / DSES / DS30
+        # --------------------------------------------------------
+        wanted = {"DSEX", "DSES", "DS30"}
+        records = []
+
+        for row in rows[1:]:
+            cells = row.find_all("td")
+
+            if len(cells) <= max(required_positions):
+                continue
+
+            values = [
+                clean_text(cell.get_text(" ", strip=True))
+                for cell in cells
+            ]
+
+            symbol = values[symbol_pos].strip().upper()
+
+            if symbol not in wanted:
+                continue
+
+            source_date = clean_text(values[date_pos])
+
+            # The supplied PriceFile date must match the official
+            # DSE trading date. Accept common date representations.
+            parsed_source_date = pd.to_datetime(
+                source_date,
+                errors="coerce",
+                dayfirst=False,
+            )
+
+            if pd.isna(parsed_source_date):
+                parsed_source_date = pd.to_datetime(
+                    source_date,
+                    errors="coerce",
+                    dayfirst=True,
+                )
+
+            if pd.isna(parsed_source_date):
+                raise RuntimeError(
+                    f"Invalid LankaBangla date for {symbol}: "
+                    f"{source_date}"
+                )
+
+            parsed_date = parsed_source_date.strftime(DATE_FMT)
+
+            if parsed_date != trading_date:
+                raise RuntimeError(
+                    f"LankaBangla date mismatch for {symbol}: "
+                    f"expected {trading_date}, got {parsed_date}"
+                )
+
+            records.append(
+                {
+                    "Ticker": symbol,
+                    "Date": parsed_date,
+                    "Open": safe_float(values[open_pos]),
+                    "High": safe_float(values[high_pos]),
+                    "Low": safe_float(values[low_pos]),
+                    "Close": safe_float(values[close_pos]),
+                    "Volume": safe_int(values[volume_pos]),
+                }
+            )
+
+        if not records:
+            raise RuntimeError(
+                "DSEX/DSES/DS30 not found in LankaBangla PriceFile"
+            )
+
+        result = pd.DataFrame(records)
+
+        # --------------------------------------------------------
+        # Exactly one row per index
+        # --------------------------------------------------------
+        if result["Ticker"].duplicated().any():
+            duplicates = result.loc[
+                result["Ticker"].duplicated(),
+                "Ticker",
+            ].tolist()
+            raise RuntimeError(
+                "Duplicate LankaBangla index rows found: "
+                + ", ".join(duplicates)
+            )
+
+        missing = wanted - set(result["Ticker"])
+
+        if missing:
+            raise RuntimeError(
+                "Missing LankaBangla indexes: "
+                + ", ".join(sorted(missing))
+            )
+
+        if len(result) != 3:
+            raise RuntimeError(
+                f"Expected 3 LankaBangla index rows, got {len(result)}"
+            )
+
+        # --------------------------------------------------------
+        # Validate OHLC and volume
+        # --------------------------------------------------------
+        for _, row in result.iterrows():
+            symbol = row["Ticker"]
+
+            for field in ("Open", "High", "Low", "Close"):
+                if pd.isna(row[field]) or row[field] <= 0:
+                    raise RuntimeError(
+                        f"Invalid {symbol} {field}: {row[field]}"
+                    )
+
+            if row["High"] < row["Low"]:
+                raise RuntimeError(
+                    f"Invalid {symbol}: High < Low"
+                )
+
+            if not (
+                row["Low"] <= row["Open"] <= row["High"]
+            ):
+                raise RuntimeError(
+                    f"Invalid {symbol}: Open outside High/Low range"
+                )
+
+            if not (
+                row["Low"] <= row["Close"] <= row["High"]
+            ):
+                raise RuntimeError(
+                    f"Invalid {symbol}: Close outside High/Low range"
+                )
+
+            if row["Volume"] < 0:
+                raise RuntimeError(
+                    f"Invalid {symbol}: negative volume"
+                )
+
+        # --------------------------------------------------------
+        # Volume convention
+        # --------------------------------------------------------
+        # LankaBangla PriceFile provides the same market volume
+        # for DSEX, DSES and DS30. It is not three separate
+        # index-specific volumes.
+        #
+        # Keep the market volume only on DSEX.
+        # DSES and DS30 receive Volume = 0.
+        # This prevents duplicate market volume in downstream
+        # calculations.
+        # --------------------------------------------------------
+        result.loc[
+            result["Ticker"].isin(["DSES", "DS30"]),
+            "Volume",
+        ] = 0
+
+        result["Volume"] = (
+            result["Volume"]
+            .fillna(0)
+            .astype("int64")
+        )
+
+        # --------------------------------------------------------
+        # Standard index order
+        # --------------------------------------------------------
+        index_order = ["DSEX", "DSES", "DS30"]
+
+        result["Ticker"] = pd.Categorical(
+            result["Ticker"],
+            categories=index_order,
+            ordered=True,
+        )
+
+        result = (
+            result
+            .sort_values("Ticker")
+            .reset_index(drop=True)
+        )
+
+        result["Ticker"] = result["Ticker"].astype(str)
+
+        result = result[
+            [
+                "Ticker",
+                "Date",
+                "Open",
+                "High",
+                "Low",
+                "Close",
+                "Volume",
+            ]
+        ]
 
         print()
-        print("DSE Official Date:", dse_date)
-        print("DSE DSEX Close:", closes["DSEX"])
-        print("DSE DSES Close:", closes["DSES"])
-        print("DSE DS30 Close:", closes["DS30"])
-        print("DSE Total Volume:", total_volume)
+        print("LankaBangla Index Summary:")
 
-        return {
-            "date": dse_date,
-            "close": closes,
-            "volume": total_volume,
-        }
+        for _, row in result.iterrows():
+            print(
+                f"{row['Ticker']}: "
+                f"O={row['Open']:.5f} "
+                f"H={row['High']:.5f} "
+                f"L={row['Low']:.5f} "
+                f"C={row['Close']:.5f} "
+                f"V={int(row['Volume'])}"
+            )
+
+        print()
+        print(
+            "LankaBangla DSEX / DSES / DS30 validation PASSED."
+        )
+
+        return result
 
     except Exception as exc:
-        logging.exception("DSE index parsing failed")
-        print("DSE INDEX ERROR:", exc)
+        logging.exception(
+            "LankaBangla index collection failed"
+        )
+        print("LANKABANGLA INDEX ERROR:", exc)
         return None
 
 
@@ -1052,25 +1052,12 @@ def parse_dse_index_data():
 # 6. FINAL DATASET
 # ================================================================
 
-def build_final_dataset(
-    stocks,
-    tradingview_indices,
-    dse_indices,
-    trading_date,
-):
+def build_final_dataset(stocks, index_df, trading_date):
     if stocks is None or stocks.empty:
         raise RuntimeError("No DSE/SME stock data")
 
-    if tradingview_indices is None:
-        raise RuntimeError("TradingView index data missing")
-
-    if dse_indices is None:
-        raise RuntimeError("DSE index data missing")
-
-    if dse_indices["date"] != trading_date:
-        raise RuntimeError(
-            "DSE index date does not match official trading date"
-        )
+    if index_df is None or index_df.empty:
+        raise RuntimeError("LankaBangla index data missing")
 
     expected = [
         "Ticker",
@@ -1087,56 +1074,96 @@ def build_final_dataset(
             f"Unexpected stock columns: {list(stocks.columns)}"
         )
 
+    if list(index_df.columns) != expected:
+        raise RuntimeError(
+            f"Unexpected index columns: {list(index_df.columns)}"
+        )
+
     if stocks["Ticker"].duplicated().any():
         raise RuntimeError("Duplicate stock ticker found")
+
+    if index_df["Ticker"].duplicated().any():
+        raise RuntimeError("Duplicate index ticker found")
 
     if not (
         stocks["Date"].astype(str) == trading_date
     ).all():
         raise RuntimeError("Stock date mismatch")
 
+    if not (
+        index_df["Date"].astype(str) == trading_date
+    ).all():
+        raise RuntimeError("Index date mismatch")
+
+    expected_indexes = {"DSEX", "DSES", "DS30"}
+    actual_indexes = set(index_df["Ticker"])
+
+    if actual_indexes != expected_indexes:
+        raise RuntimeError(
+            "Index set mismatch: "
+            f"expected {expected_indexes}, got {actual_indexes}"
+        )
+
+    if len(index_df) != 3:
+        raise RuntimeError(
+            f"Expected exactly 3 index rows, got {len(index_df)}"
+        )
+
     if (stocks["Volume"] < 0).any():
         raise RuntimeError("Negative stock volume found")
 
-    for symbol in ("DSEX", "DSES", "DS30"):
-        tv = tradingview_indices[symbol]
-        close = dse_indices["close"][symbol]
+    if (index_df["Volume"] < 0).any():
+        raise RuntimeError("Negative index volume found")
 
-        if any(tv[x] <= 0 for x in ("Open", "High", "Low")):
+    # ------------------------------------------------------------
+    # Validate index OHLC again at final-dataset level.
+    # ------------------------------------------------------------
+    for _, row in index_df.iterrows():
+        symbol = row["Ticker"]
+
+        for field in ("Open", "High", "Low", "Close"):
+            if pd.isna(row[field]) or row[field] <= 0:
+                raise RuntimeError(
+                    f"Invalid final index {symbol} {field}"
+                )
+
+        if row["High"] < row["Low"]:
             raise RuntimeError(
-                f"Invalid TradingView {symbol} O/H/L"
+                f"Invalid final index {symbol}: High < Low"
             )
 
-        if close <= 0:
+        if not (
+            row["Low"] <= row["Open"] <= row["High"]
+        ):
             raise RuntimeError(
-                f"Invalid DSE website {symbol} Close"
+                f"Invalid final index {symbol}: Open outside range"
             )
 
-    if dse_indices["volume"] <= 0:
-        raise RuntimeError("Invalid DSE total volume")
+        if not (
+            row["Low"] <= row["Close"] <= row["High"]
+        ):
+            raise RuntimeError(
+                f"Invalid final index {symbol}: Close outside range"
+            )
 
-    index_rows = []
+    # ------------------------------------------------------------
+    # Prevent a stock ticker from colliding with an index ticker.
+    # ------------------------------------------------------------
+    stock_index_overlap = (
+        set(stocks["Ticker"]) & expected_indexes
+    )
 
-    for symbol in ("DSEX", "DSES", "DS30"):
-        tv = tradingview_indices[symbol]
-
-        index_rows.append(
-            [
-                symbol,
-                trading_date,
-                tv["Open"],
-                tv["High"],
-                tv["Low"],
-                dse_indices["close"][symbol],
-                dse_indices["volume"] if symbol == "DSEX" else 0,
-            ]
+    if stock_index_overlap:
+        raise RuntimeError(
+            "Stock/index ticker collision: "
+            + ", ".join(sorted(stock_index_overlap))
         )
 
+    # ------------------------------------------------------------
+    # Append the three LankaBangla index rows.
+    # ------------------------------------------------------------
     final_df = pd.concat(
-        [
-            stocks,
-            pd.DataFrame(index_rows, columns=expected),
-        ],
+        [stocks, index_df],
         ignore_index=True,
     )
 
@@ -1145,10 +1172,20 @@ def build_final_dataset(
             "Duplicate ticker/index in final dataset"
         )
 
-    if len(final_df) <= len(stocks):
-        raise RuntimeError("Index rows were not appended")
+    expected_rows = len(stocks) + 3
 
-    return final_df
+    if len(final_df) != expected_rows:
+        raise RuntimeError(
+            "Final row-count validation failed: "
+            f"expected {expected_rows}, got {len(final_df)}"
+        )
+
+    if final_df["Ticker"].nunique() != len(final_df):
+        raise RuntimeError(
+            "Final dataset contains duplicate tickers"
+        )
+
+    return final_df[expected]
 
 
 # ================================================================
@@ -1213,7 +1250,6 @@ def collect_and_publish():
     # ------------------------------------------------------------
     # Date gate
     # ------------------------------------------------------------
-
     current_date = today_bd()
     official_date = get_dse_official_date()
 
@@ -1239,9 +1275,8 @@ def collect_and_publish():
     trading_date = official_date
 
     # ------------------------------------------------------------
-    # SME source remains unchanged
+    # SME source
     # ------------------------------------------------------------
-
     sme_df = scrape_sme_data(trading_date)
 
     if sme_df is None:
@@ -1250,7 +1285,6 @@ def collect_and_publish():
     # ------------------------------------------------------------
     # DSE stocks from Day End Archive
     # ------------------------------------------------------------
-
     dse_df = scrape_dse_day_end_archive(
         trading_date,
         sme_tickers=sme_df["Ticker"].tolist(),
@@ -1262,9 +1296,8 @@ def collect_and_publish():
         )
 
     # ------------------------------------------------------------
-    # Combine
+    # Combine DSE + SME
     # ------------------------------------------------------------
-
     stocks = combine_dse_sme(
         dse_df,
         sme_df,
@@ -1274,31 +1307,20 @@ def collect_and_publish():
         raise RuntimeError("DSE + SME combination failed")
 
     # ------------------------------------------------------------
-    # TradingView O/H/L
+    # LankaBangla DSEX / DSES / DS30
     # ------------------------------------------------------------
+    index_df = get_lankabangla_indices(
+        trading_date
+    )
 
-    tradingview_indices = get_tradingview_indices()
-
-    if tradingview_indices is None:
+    if index_df is None:
         raise RuntimeError(
-            "TradingView index collection failed"
-        )
-
-    # ------------------------------------------------------------
-    # DSE website closes + DSEX volume
-    # ------------------------------------------------------------
-
-    dse_indices = parse_dse_index_data()
-
-    if dse_indices is None:
-        raise RuntimeError(
-            "DSE website index collection failed"
+            "LankaBangla index collection failed"
         )
 
     # ------------------------------------------------------------
     # Final validation
     # ------------------------------------------------------------
-
     print()
     print("=" * 70)
     print("FINAL DATASET VALIDATION")
@@ -1306,21 +1328,18 @@ def collect_and_publish():
 
     final_df = build_final_dataset(
         stocks,
-        tradingview_indices,
-        dse_indices,
+        index_df,
         trading_date,
     )
 
     print("FINAL VALIDATION: PASSED")
     print("Stock Rows:", len(stocks))
+    print("Index Rows:", len(index_df))
     print("Final Rows:", len(final_df))
-    print("DSEX Close:", dse_indices["close"]["DSEX"])
-    print("DSEX Volume:", dse_indices["volume"])
 
     # ------------------------------------------------------------
-    # Publish only after everything passes
+    # Publish only after all validation passes
     # ------------------------------------------------------------
-
     daily_file = publish_daily_csv(
         final_df,
         trading_date,
