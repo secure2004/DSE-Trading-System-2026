@@ -1841,7 +1841,6 @@ def build_final_dataset(
         "DSEX",
         "DS30",
         "DSES",
-        "LBS",
     }
 
     actual_indexes = set(
@@ -1962,7 +1961,6 @@ def build_final_dataset(
         "DSEX",
         "DS30",
         "DSES",
-        "LBS",
     ]
 
     index_df = (
