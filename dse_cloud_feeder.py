@@ -1,44 +1,48 @@
 from pathlib import Path
 
-content = r'''# ================================================================
-# DSE + SME + DSEX / DSES / DS30 DAILY EOD CLOUD DATA FEEDER
-# ================================================================
-#
-# AGREED DESIGN
-#
-# START
-#   -> Current Bangladesh local date
-#   -> DSE official date
-#       MATCH     -> wait until 2:40 PM -> collect
-#       NO MATCH  -> STOP
-#
-# 2:40 PM
-#   -> DSE Day End Archive: DSE stocks OHLC + Volume
-#   -> Existing SME source: SME stocks
-#   -> Combine DSE + SME
-#   -> LankaBangla: DSEX / DSES / DS30
-#   -> Final validation
-#   -> data/YYYY/MM/DSE_EOD_YYYY-MM-DD.csv
-#
-# 2:40 failure -> retry once at 2:45 PM -> failure = STOP
-#
-# NO:
-#   - intraday DSE stock source
-#   - 09:30 reset block
-#   - HTS/holiday lookup
-#   - hard-coded weekday/weekend rule
-#   - fixed ticker count
-#   - Close=0 filter
-#   - Volume=0 filter
-#   - latest CSV
-#
-# FINAL CSV ORDER:
-#   1. DSEX
-#   2. DS30
-#   3. DSES
-#   4. DSE tickers - alphabetical
-#   5. SME tickers - alphabetical
-# ================================================================
+content = r'''#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+DSE Cloud Feeder
+================
+
+Daily Bangladesh DSE/SME EOD data collector.
+
+Workflow:
+1. Start with current Bangladesh local date.
+2. Get the official DSE trading date from DSE index page.
+3. If local date != official DSE date, stop.
+4. Wait until 2:40 PM Bangladesh time if started earlier.
+5. Collect:
+   - DSE Day End Archive
+   - DSE SME latest price source
+   - LankaBangla PriceFile for DSEX / DS30 / DSES
+6. Combine and validate.
+7. Publish:
+   data/YYYY/MM/DSE_EOD_YYYY-MM-DD.csv
+
+Retry:
+- Attempt 1 at 2:40 PM
+- Attempt 2 at 2:45 PM if attempt 1 fails
+- Stop after the second failure.
+
+Important:
+- No TradingView.
+- No tradingview_ta.
+- No lxml dependency.
+- LankaBangla HTML is parsed with BeautifulSoup.
+- No hard-coded weekday/weekend or holiday rules.
+- No Close=0 or Volume=0 stock filtering.
+- DSES/DS30 market volume from LankaBangla is forced to 0 because
+  the same market-wide volume is returned for all three indices.
+- Final CSV order:
+    DSEX
+    DS30
+    DSES
+    DSE tickers
+    SME tickers
+"""
 
 import argparse
 import logging
@@ -46,7 +50,8 @@ import re
 import sys
 import time
 import urllib3
-from datetime import datetime, time as dt_time
+
+from datetime import datetime, time as dt_time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -55,49 +60,61 @@ import requests
 from bs4 import BeautifulSoup
 
 
-# ================================================================
-# CONFIGURATION
-# ================================================================
+# ============================================================
+# PATHS
+# ============================================================
 
 PROJECT_DIR = Path(__file__).resolve().parent
-DATA_DIR = PROJECT_DIR.parent
+
+DATA_DIR = PROJECT_DIR / "data"
+
 LOG_FILE = PROJECT_DIR / "dse_data_feeder.log"
 
-DSE_INDEX_URL = "https://www.dsebd.org/index.php"
-DSE_ARCHIVE_URL = "https://www.dsebd.org/day_end_archive.php"
-SME_HTML_URL = "https://sme.dsebd.org/sme_latest_share_price_scroll_by_ltp.php"
 
-LANKABANGLA_PRICEFILE_URL = (
-    "https://www.lankabd.com/Home/PriceFile?dateinp={}"
+# ============================================================
+# URLs
+# ============================================================
+
+DSE_INDEX_URL = (
+    "https://www.dsebd.org/index.php"
 )
 
-BD_TZ = ZoneInfo("Asia/Dhaka")
+DSE_ARCHIVE_URL = (
+    "https://www.dsebd.org/day_end_archive.php"
+)
+
+SME_HTML_URL = (
+    "https://sme.dsebd.org/"
+    "sme_latest_share_price_scroll_by_ltp.php"
+)
+
+LANKABANGLA_PRICEFILE_URL = (
+    "https://www.lankabd.com/Home/PriceFile"
+)
+
+
+# ============================================================
+# CONSTANTS
+# ============================================================
+
+BD_TZ = ZoneInfo(
+    "Asia/Dhaka"
+)
+
 DATE_FMT = "%Y-%m-%d"
 
-FEED_TIME = dt_time(14, 40)
-RETRY_TIME = dt_time(14, 45)
+FEED_TIME = dt_time(
+    14,
+    40,
+)
+
+RETRY_TIME = dt_time(
+    14,
+    45,
+)
 
 MAX_ATTEMPTS = 2
 
-DSE_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/139.0.0.0 Safari/537.36"
-    ),
-    "Accept": (
-        "text/html,application/xhtml+xml,application/xml;"
-        "q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.dsebd.org/",
-    "Connection": "keep-alive",
-}
-
-SME_HEADERS = {
-    **DSE_HEADERS,
-    "Referer": "https://sme.dsebd.org/",
-}
 
 EXPECTED_COLUMNS = [
     "Ticker",
@@ -109,540 +126,345 @@ EXPECTED_COLUMNS = [
     "Volume",
 ]
 
-# Suppress only the urllib3 warning caused by verify=False.
+
+# ============================================================
+# HTTP HEADERS
+# ============================================================
+
+DSE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/153.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,"
+        "application/xml;q=0.9,image/avif,image/webp,"
+        "image/apng,*/*;q=0.8"
+    ),
+    "Accept-Language": (
+        "en-US,en;q=0.9"
+    ),
+    "Connection": "keep-alive",
+}
+
+
+SME_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/153.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,"
+        "application/xml;q=0.9,image/avif,image/webp,"
+        "image/apng,*/*;q=0.8"
+    ),
+    "Accept-Language": (
+        "en-US,en;q=0.9"
+    ),
+    "Connection": "keep-alive",
+}
+
+
+LANKABANGLA_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/153.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,"
+        "application/xml;q=0.9,image/avif,image/webp,"
+        "image/apng,*/*;q=0.8"
+    ),
+    "Accept-Language": (
+        "en-US,en;q=0.9"
+    ),
+    "Connection": "keep-alive",
+}
+
+
+# ============================================================
+# SSL WARNING SUPPRESSION
+# ============================================================
+
 urllib3.disable_warnings(
     urllib3.exceptions.InsecureRequestWarning
 )
 
-DATA_DIR.mkdir(
-    parents=True,
-    exist_ok=True,
+
+# ============================================================
+# LOGGING
+# ============================================================
+
+def setup_logging():
+    """
+    Configure console + file logging.
+    """
+
+    LOG_FILE.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format=(
+            "%(asctime)s | "
+            "%(levelname)s | "
+            "%(message)s"
+        ),
+        handlers=[
+            logging.FileHandler(
+                LOG_FILE,
+                encoding="utf-8",
+            ),
+            logging.StreamHandler(
+                sys.stdout,
+            ),
+        ],
+    )
+
+
+logger = logging.getLogger(
+    __name__
 )
 
-logging.basicConfig(
-    filename=str(LOG_FILE),
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
 
-
-# ================================================================
-# GENERAL HELPERS
-# ================================================================
-
-def safe_float(value):
-    try:
-        s = str(value).strip().replace(",", "")
-
-        if s in (
-            "",
-            "--",
-            "N/A",
-            "NA",
-            "None",
-            "nan",
-            "NaN",
-        ):
-            return 0.0
-
-        return float(s)
-
-    except Exception:
-        return 0.0
-
-
-def safe_int(value):
-    try:
-        s = str(value).strip().replace(",", "")
-
-        if s in (
-            "",
-            "--",
-            "N/A",
-            "NA",
-            "None",
-            "nan",
-            "NaN",
-        ):
-            return 0
-
-        return int(float(s))
-
-    except Exception:
-        return 0
-
+# ============================================================
+# BASIC HELPERS
+# ============================================================
 
 def clean_text(value):
-    return re.sub(
-        r"\s+",
-        " ",
-        str(value).strip(),
+    """
+    Convert any value to a normalized string.
+    """
+
+    if value is None:
+        return ""
+
+    return (
+        str(value)
+        .replace("\xa0", " ")
+        .strip()
     )
 
 
 def norm(value):
-    return clean_text(value).upper()
+    """
+    Normalize header text for comparison.
+    """
+
+    text = clean_text(
+        value
+    ).upper()
+
+    text = re.sub(
+        r"[^A-Z0-9]+",
+        "",
+        text,
+    )
+
+    return text
+
+
+def safe_float(value):
+    """
+    Safely convert text to float.
+
+    Handles:
+    - commas
+    - whitespace
+    - parentheses
+    - empty strings
+    """
+
+    text = clean_text(
+        value
+    )
+
+    if not text:
+        return None
+
+    text = text.replace(
+        ",",
+        "",
+    )
+
+    text = text.replace(
+        "\u2212",
+        "-",
+    )
+
+    if (
+        text.startswith("(")
+        and text.endswith(")")
+    ):
+        text = "-" + text[1:-1]
+
+    try:
+        return float(text)
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return None
+
+
+def safe_int(value):
+    """
+    Safely convert value to integer.
+    """
+
+    number = safe_float(
+        value
+    )
+
+    if number is None:
+        return None
+
+    return int(
+        round(number)
+    )
 
 
 def now_bd():
-    return datetime.now(BD_TZ)
+    """
+    Current Bangladesh local datetime.
+    """
+
+    return datetime.now(
+        BD_TZ
+    )
 
 
 def today_bd():
-    return now_bd().strftime(DATE_FMT)
+    """
+    Current Bangladesh local date.
+    """
+
+    return now_bd().date()
 
 
-def find_column(columns, candidates):
-    normalized = {
-        norm(c): c
-        for c in columns
-    }
+def find_column(
+    headers,
+    candidates,
+):
+    """
+    Find a column index from normalized header candidates.
 
-    for candidate in candidates:
-        key = norm(candidate)
+    Exact normalized match is preferred.
+    """
 
-        if key in normalized:
-            return normalized[key]
+    normalized_headers = [
+        norm(header)
+        for header in headers
+    ]
 
-    for col in columns:
-        c = norm(col)
+    normalized_candidates = [
+        norm(candidate)
+        for candidate in candidates
+    ]
 
-        for candidate in candidates:
-            if norm(candidate) in c:
-                return col
+    for candidate in normalized_candidates:
+        for index, header in enumerate(
+            normalized_headers
+        ):
+            if header == candidate:
+                return index
 
     return None
 
 
 def valid_ticker(value):
-    ticker = str(value).strip().upper()
+    """
+    Basic ticker validation.
+    """
 
-    return bool(ticker)
+    ticker = clean_text(
+        value
+    ).upper()
 
+    if not ticker:
+        return False
 
-# ================================================================
-# 0. OFFICIAL DSE DATE
-# ================================================================
-
-def get_dse_official_date():
-    print()
-    print("=" * 70)
-    print("0. GETTING OFFICIAL DSE TRADING DATE")
-    print("=" * 70)
-
-    try:
-        response = requests.get(
-            DSE_INDEX_URL,
-            headers=DSE_HEADERS,
-            timeout=30,
-            verify=False,
-        )
-
-        response.raise_for_status()
-
-        print(
-            "DSE Date URL:",
-            DSE_INDEX_URL,
-        )
-
-        print(
-            "DSE Date Response:",
-            len(response.content),
-            "bytes",
-        )
-
-        match = re.search(
-            r"Last\s+update\s+on\s+"
-            r"([A-Za-z]+)\s+"
-            r"(\d{1,2}),\s+"
-            r"(\d{4})",
-            response.text,
-            re.IGNORECASE,
-        )
-
-        if not match:
-            raise RuntimeError(
-                "DSE official trading date not found"
-            )
-
-        month_name, day, year = match.groups()
-
-        parsed = None
-
-        for fmt in (
-            "%B %d %Y",
-            "%b %d %Y",
-        ):
-            try:
-                parsed = datetime.strptime(
-                    f"{month_name} {day} {year}",
-                    fmt,
-                )
-
-                break
-
-            except ValueError:
-                pass
-
-        if parsed is None:
-            raise RuntimeError(
-                "Could not parse DSE official date"
-            )
-
-        result = parsed.strftime(DATE_FMT)
-
-        print(
-            "Official DSE Trading Date:",
-            result,
-        )
-
-        return result
-
-    except Exception as exc:
-        logging.exception(
-            "Official DSE date failed"
-        )
-
-        print(
-            "DSE DATE ERROR:",
-            exc,
-        )
-
-        return None
-
-
-def date_gate_only():
-    current_date = today_bd()
-    dse_date = get_dse_official_date()
-
-    print()
-    print("=" * 70)
-    print("DATE GATE")
-    print("=" * 70)
-
-    print(
-        "Current Bangladesh Date :",
-        current_date,
-    )
-
-    print(
-        "DSE Official Trading Date:",
-        dse_date,
-    )
-
-    if dse_date is None:
-        print("STATUS: FAILED")
-        return 1
-
-    if current_date != dse_date:
-        print("STATUS: STOP")
-
-        print(
-            "Dates do not match. "
-            "No market data will be collected."
-        )
-
-        return 0
-
-    print("STATUS: MATCH")
-
-    print(
-        "DSE official date matches "
-        "today's Bangladesh date."
-    )
-
-    return 0
-
-
-# ================================================================
-# 1. DSE STOCKS - DAY END ARCHIVE
-# ================================================================
-
-def scrape_dse_day_end_archive(
-    trading_date,
-    sme_tickers,
-):
-    print()
-    print("=" * 70)
-    print("1. DSE STOCK DATA - DAY END ARCHIVE")
-    print("=" * 70)
-
-    params = {
-        "startDate": trading_date,
-        "endDate": trading_date,
-        "inst": "All Instrument",
-        "archive": "data",
-    }
-
-    try:
-        response = requests.get(
-            DSE_ARCHIVE_URL,
-            params=params,
-            headers=DSE_HEADERS,
-            timeout=45,
-            verify=False,
-        )
-
-        response.raise_for_status()
-
-        print(
-            "DSE Archive URL:",
-            response.url,
-        )
-
-        print(
-            "HTTP Status:",
-            response.status_code,
-        )
-
-        print(
-            "Response Size:",
-            len(response.content),
-            "bytes",
-        )
-
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser",
-        )
-
-    except Exception as exc:
-        logging.exception(
-            "DSE Day End Archive request failed"
-        )
-
-        print(
-            "DSE ARCHIVE ERROR:",
-            repr(exc),
-        )
-
-        return None
-
-    # ------------------------------------------------------------
-    # Find the actual EOD stock table.
-    #
-    # Do NOT depend on a fixed table number.
-    # ------------------------------------------------------------
-
-    target = None
-    target_index = None
-
-    tables = soup.find_all("table")
-
-    print(
-        "HTML Tables Found:",
-        len(tables),
-    )
-
-    for i, table in enumerate(tables):
-
-        rows = table.find_all("tr")
-
-        if not rows:
-            continue
-
-        header_cells = rows[0].find_all(
-            ["th", "td"]
-        )
-
-        headers = [
-            norm(
-                cell.get_text(
-                    " ",
-                    strip=True,
-                )
-            )
-            for cell in header_cells
-        ]
-
-        required_headers = {
-            "TRADING CODE",
-            "HIGH",
-            "LOW",
-            "OPENP*",
-            "CLOSEP*",
-            "VOLUME",
-        }
-
-        if required_headers.issubset(
-            set(headers)
-        ):
-            target = table
-            target_index = i
-            break
-
-    if target is None:
-        print(
-            "ERROR: DSE Day End Archive "
-            "stock table not found"
-        )
-
-        logging.error(
-            "DSE archive stock table not found; "
-            "html_tables=%d",
-            len(tables),
-        )
-
-        return None
-
-    print(
-        "DSE Stock Table Found: TABLE",
-        target_index,
-    )
-
-    rows = target.find_all("tr")
-
-    if len(rows) < 2:
-        print(
-            "ERROR: DSE stock table "
-            "contains no data rows"
-        )
-
-        return None
-
-    header_cells = rows[0].find_all(
-        ["th", "td"]
-    )
-
-    headers = [
-        norm(
-            cell.get_text(
-                " ",
-                strip=True,
-            )
-        )
-        for cell in header_cells
-    ]
-
-    header_positions = {
-        header: i
-        for i, header in enumerate(headers)
-    }
-
-    def header_position(*names):
-        for name in names:
-            key = norm(name)
-
-            if key in header_positions:
-                return header_positions[key]
-
-        return None
-
-    ticker_pos = header_position(
+    if ticker in {
         "TRADING CODE",
         "TRADINGCODE",
-    )
+        "SYMBOL",
+        "TOTAL",
+        "TOTALS",
+        "N/A",
+        "NA",
+    }:
+        return False
 
-    date_pos = header_position(
-        "DATE",
-    )
-
-    open_pos = header_position(
-        "OPENP*",
-        "OPENP",
-        "OPEN",
-    )
-
-    high_pos = header_position(
-        "HIGH",
-    )
-
-    low_pos = header_position(
-        "LOW",
-    )
-
-    close_pos = header_position(
-        "CLOSEP*",
-        "CLOSEP",
-        "CLOSE",
-    )
-
-    volume_pos = header_position(
-        "VOLUME",
-    )
-
-    print()
-    print("DSE Archive Detected Columns:")
-
-    print(
-        "Ticker :",
-        "TRADING CODE"
-        if ticker_pos is not None
-        else None,
-    )
-
-    print(
-        "Date   :",
-        "DATE"
-        if date_pos is not None
-        else None,
-    )
-
-    print(
-        "Open   :",
-        "OPENP*"
-        if open_pos is not None
-        else None,
-    )
-
-    print(
-        "High   :",
-        "HIGH"
-        if high_pos is not None
-        else None,
-    )
-
-    print(
-        "Low    :",
-        "LOW"
-        if low_pos is not None
-        else None,
-    )
-
-    print(
-        "Close  :",
-        "CLOSEP*"
-        if close_pos is not None
-        else None,
-    )
-
-    print(
-        "Volume :",
-        "VOLUME"
-        if volume_pos is not None
-        else None,
-    )
-
-    required_positions = [
-        ticker_pos,
-        open_pos,
-        high_pos,
-        low_pos,
-        close_pos,
-        volume_pos,
-    ]
-
-    if any(
-        pos is None
-        for pos in required_positions
-    ):
-        print(
-            "ERROR: Required DSE archive "
-            "columns missing"
+    return bool(
+        re.fullmatch(
+            r"[A-Z0-9&._-]+",
+            ticker,
         )
+    )
 
+
+def parse_date_value(value):
+    """
+    Convert common date representations to YYYY-MM-DD.
+    """
+
+    text = clean_text(
+        value
+    )
+
+    if not text:
         return None
 
-    records = []
+    formats = [
+        "%Y-%m-%d",
+        "%d-%m-%Y",
+        "%d/%m/%Y",
+        "%m/%d/%Y",
+        "%d-%b-%Y",
+        "%d/%b/%Y",
+        "%d %b %Y",
+        "%d %B %Y",
+        "%b %d, %Y",
+        "%B %d, %Y",
+    ]
 
-    for row in rows[1:]:
+    for fmt in formats:
+        try:
+            return datetime.strptime(
+                text,
+                fmt,
+            ).date()
+        except ValueError:
+            pass
 
-        cells = row.find_all("td")
+    parsed = pd.to_datetime(
+        text,
+        errors="coerce",
+        dayfirst=False,
+    )
 
-        if len(cells) <= max(
-            required_positions
-        ):
-            continue
+    if pd.isna(parsed):
+        return None
+
+    return parsed.date()
+
+
+def table_rows(table):
+    """
+    Return non-empty table rows as lists of text.
+    """
+
+    rows = []
+
+    for tr in table.find_all("tr"):
+        cells = tr.find_all(
+            ["th", "td"]
+        )
 
         values = [
             clean_text(
@@ -654,523 +476,791 @@ def scrape_dse_day_end_archive(
             for cell in cells
         ]
 
-        ticker = (
-            values[ticker_pos]
-            .strip()
-            .upper()
+        if any(values):
+            rows.append(values)
+
+    return rows
+
+
+def locate_header_row(
+    rows,
+    required_headers,
+    max_scan=15,
+):
+    """
+    Locate the first row containing all required headers.
+    """
+
+    required = {
+        norm(item)
+        for item in required_headers
+    }
+
+    for row_index, row in enumerate(
+        rows[:max_scan]
+    ):
+        row_norm = {
+            norm(item)
+            for item in row
+        }
+
+        if required.issubset(
+            row_norm
+        ):
+            return row_index
+
+    return None
+
+
+# ============================================================
+# DSE OFFICIAL DATE
+# ============================================================
+
+def get_dse_official_date():
+    """
+    Read official DSE last-update date.
+
+    Expected page text contains:
+        Last update on September 20, 2026
+    """
+
+    print()
+    print(
+        "=" * 70
+    )
+    print(
+        "CHECKING OFFICIAL DSE DATE"
+    )
+    print(
+        "=" * 70
+    )
+
+    response = requests.get(
+        DSE_INDEX_URL,
+        headers=DSE_HEADERS,
+        timeout=30,
+        verify=False,
+    )
+
+    response.raise_for_status()
+
+    match = re.search(
+        r"Last\s+update\s+on\s+"
+        r"([A-Za-z]+)\s+"
+        r"(\d{1,2}),\s+"
+        r"(\d{4})",
+        response.text,
+        re.IGNORECASE,
+    )
+
+    if not match:
+        raise RuntimeError(
+            "Could not find official DSE date "
+            "on DSE index page."
         )
 
-        if not valid_ticker(ticker):
+    month_name = match.group(
+        1
+    )
+    day = int(
+        match.group(2)
+    )
+    year = int(
+        match.group(3)
+    )
 
-            logging.warning(
-                "Skipped invalid DSE ticker: %r",
-                ticker,
-            )
+    official_date = datetime.strptime(
+        f"{month_name} {day} {year}",
+        "%B %d %Y",
+    ).date()
 
-            print(
-                "WARNING: Skipped invalid "
-                "DSE ticker:",
-                repr(ticker),
-            )
+    print(
+        "Official DSE Date:",
+        official_date.strftime(
+            DATE_FMT
+        ),
+    )
 
+    return official_date
+
+
+def date_gate_only():
+    """
+    Check local Bangladesh date against official DSE date.
+
+    Returns:
+        trading_date if equal
+        None if not equal
+    """
+
+    local_date = today_bd()
+
+    print()
+    print(
+        "Bangladesh Local Date:",
+        local_date.strftime(
+            DATE_FMT
+        ),
+    )
+
+    try:
+        official_date = (
+            get_dse_official_date()
+        )
+    except Exception as exc:
+        print(
+            "DSE date check failed:",
+            exc,
+        )
+        return None
+
+    if local_date != official_date:
+        print()
+        print(
+            "DATE GATE: STOP"
+        )
+        print(
+            "Local date and official DSE date "
+            "do not match."
+        )
+        print(
+            "No collection will be performed."
+        )
+        return None
+
+    print()
+    print(
+        "DATE GATE: PASS"
+    )
+
+    return official_date
+
+
+# ============================================================
+# DSE DAY END ARCHIVE
+# ============================================================
+
+def scrape_dse_day_end_archive(
+    trading_date,
+):
+    """
+    Collect DSE stock OHLC + Volume from Day End Archive.
+
+    The table is discovered dynamically from headers.
+    No fixed table number is used.
+    """
+
+    print()
+    print(
+        "=" * 70
+    )
+    print(
+        "1. DSE DAY END ARCHIVE"
+    )
+    print(
+        "=" * 70
+    )
+
+    date_string = trading_date.strftime(
+        DATE_FMT
+    )
+
+    params = {
+        "startDate": date_string,
+        "endDate": date_string,
+        "inst": "All",
+        "archive": "1",
+    }
+
+    response = requests.get(
+        DSE_ARCHIVE_URL,
+        params=params,
+        headers=DSE_HEADERS,
+        timeout=60,
+        verify=False,
+    )
+
+    response.raise_for_status()
+
+    soup = BeautifulSoup(
+        response.text,
+        "html.parser",
+    )
+
+    target_table = None
+    target_rows = None
+    header_row_index = None
+
+    required = [
+        "TRADING CODE",
+        "HIGH",
+        "LOW",
+        "VOLUME",
+    ]
+
+    for table in soup.find_all("table"):
+        rows = table_rows(
+            table
+        )
+
+        if not rows:
             continue
 
-        # If the page supplies a date, verify it.
-        if date_pos is not None:
+        header_index = locate_header_row(
+            rows,
+            required,
+        )
 
-            row_date = (
-                values[date_pos]
-                .strip()
+        if header_index is None:
+            continue
+
+        headers = rows[
+            header_index
+        ]
+
+        if (
+            find_column(
+                headers,
+                ["OPENP*", "OPEN"],
+            )
+            is None
+        ):
+            continue
+
+        if (
+            find_column(
+                headers,
+                ["CLOSEP*", "CLOSE"],
+            )
+            is None
+        ):
+            continue
+
+        target_table = table
+        target_rows = rows
+        header_row_index = header_index
+        break
+
+    if target_table is None:
+        raise RuntimeError(
+            "Could not locate DSE Day End "
+            "Archive stock table."
+        )
+
+    headers = target_rows[
+        header_row_index
+    ]
+
+    ticker_index = find_column(
+        headers,
+        [
+            "TRADING CODE",
+            "TRADINGCODE",
+        ],
+    )
+
+    date_index = find_column(
+        headers,
+        [
+            "DATE",
+            "DATE*",
+        ],
+    )
+
+    open_index = find_column(
+        headers,
+        [
+            "OPENP*",
+            "OPEN",
+            "OPENP",
+        ],
+    )
+
+    high_index = find_column(
+        headers,
+        [
+            "HIGH",
+            "HIGH*",
+        ],
+    )
+
+    low_index = find_column(
+        headers,
+        [
+            "LOW",
+            "LOW*",
+        ],
+    )
+
+    close_index = find_column(
+        headers,
+        [
+            "CLOSEP*",
+            "CLOSE",
+            "CLOSEP",
+        ],
+    )
+
+    volume_index = find_column(
+        headers,
+        [
+            "VOLUME",
+            "VOLUME*",
+        ],
+    )
+
+    required_indices = {
+        "ticker": ticker_index,
+        "open": open_index,
+        "high": high_index,
+        "low": low_index,
+        "close": close_index,
+        "volume": volume_index,
+    }
+
+    missing = [
+        name
+        for name, index in required_indices.items()
+        if index is None
+    ]
+
+    if missing:
+        raise RuntimeError(
+            "DSE archive missing columns: "
+            + ", ".join(missing)
+        )
+
+    records = []
+
+    for row in target_rows[
+        header_row_index + 1:
+    ]:
+        max_index = max(
+            index
+            for index in required_indices.values()
+            if index is not None
+        )
+
+        if len(row) <= max_index:
+            continue
+
+        ticker = clean_text(
+            row[ticker_index]
+        ).upper()
+
+        if not valid_ticker(
+            ticker
+        ):
+            continue
+
+        if date_index is not None:
+            row_date = parse_date_value(
+                row[date_index]
             )
 
             if (
-                row_date
+                row_date is not None
                 and row_date != trading_date
             ):
                 continue
 
+        open_value = safe_float(
+            row[open_index]
+        )
+
+        high_value = safe_float(
+            row[high_index]
+        )
+
+        low_value = safe_float(
+            row[low_index]
+        )
+
+        close_value = safe_float(
+            row[close_index]
+        )
+
+        volume_value = safe_int(
+            row[volume_index]
+        )
+
+        if (
+            open_value is None
+            or high_value is None
+            or low_value is None
+            or close_value is None
+            or volume_value is None
+        ):
+            continue
+
         records.append(
-            {
-                "Ticker": ticker,
-                "Date": trading_date,
-                "Open": safe_float(
-                    values[open_pos]
-                ),
-                "High": safe_float(
-                    values[high_pos]
-                ),
-                "Low": safe_float(
-                    values[low_pos]
-                ),
-                "Close": safe_float(
-                    values[close_pos]
-                ),
-                "Volume": safe_int(
-                    values[volume_pos]
-                ),
-            }
+            [
+                ticker,
+                date_string,
+                open_value,
+                high_value,
+                low_value,
+                close_value,
+                volume_value,
+            ]
         )
 
-    if not records:
-        print(
-            "ERROR: No valid DSE "
-            "stock rows extracted"
-        )
-
-        logging.error(
-            "DSE archive contained "
-            "no valid stock rows"
-        )
-
-        return None
-
-    result = pd.DataFrame(records)
-
-    # SME remains authoritative.
-    sme_set = {
-        str(x).strip().upper()
-        for x in sme_tickers
-        if valid_ticker(x)
-    }
-
-    before_sme = len(result)
-
-    if sme_set:
-        result = result[
-            ~result["Ticker"].isin(
-                sme_set
-            )
-        ].copy()
-
-    removed_sme = (
-        before_sme - len(result)
+    df = pd.DataFrame(
+        records,
+        columns=EXPECTED_COLUMNS,
     )
 
-    # No fixed ticker count.
-    # No Close=0 filter.
-    # No Volume=0 filter.
-    result.drop_duplicates(
+    if df.empty:
+        raise RuntimeError(
+            "DSE Day End Archive returned "
+            "no valid stock records."
+        )
+
+    df.drop_duplicates(
         subset=["Ticker"],
-        keep="first",
+        keep="last",
         inplace=True,
     )
 
-    result.sort_values(
+    df.sort_values(
         "Ticker",
         inplace=True,
     )
 
-    result.reset_index(
+    df.reset_index(
         drop=True,
         inplace=True,
     )
 
-    if result.empty:
-        print(
-            "ERROR: DSE archive returned "
-            "zero DSE stocks"
-        )
-
-        return None
-
-    print(
-        "DSE Stock Table Rows:",
-        len(rows) - 1,
-    )
-
     print(
         "DSE Archive Symbols:",
-        len(result),
+        len(df),
     )
 
-    print(
-        "SME Symbols Removed:",
-        removed_sme,
-    )
+    return df
 
-    print(
-        "Zero Volume Retained:",
-        int(
-            (result["Volume"] == 0).sum()
-        ),
-    )
 
-    print(
-        "Zero Close Retained:",
-        int(
-            (result["Close"] == 0).sum()
-        ),
-    )
+# ============================================================
+# SME
+# ============================================================
+
+def scrape_sme_data(
+    trading_date,
+):
+    """
+    Collect SME stock data.
+
+    Table and columns are identified dynamically.
+    """
 
     print()
-    print("DSE ARCHIVE FIRST 5:")
-
     print(
-        result.head(5).to_string(
-            index=False
-        )
+        "=" * 70
+    )
+    print(
+        "2. SME MARKET"
+    )
+    print(
+        "=" * 70
     )
 
-    return result[EXPECTED_COLUMNS]
+    response = requests.get(
+        SME_HTML_URL,
+        headers=SME_HEADERS,
+        timeout=60,
+        verify=False,
+    )
 
+    response.raise_for_status()
 
-# ================================================================
-# 2. SME - EXISTING SOURCE
-# ================================================================
+    soup = BeautifulSoup(
+        response.text,
+        "html.parser",
+    )
 
-def scrape_sme_data(trading_date):
-    print()
-    print("=" * 70)
-    print("2. SME DSE DATA")
-    print("=" * 70)
+    target_rows = None
+    header_row_index = None
 
-    try:
-        response = requests.get(
-            SME_HTML_URL,
-            headers=SME_HEADERS,
-            timeout=30,
-            verify=False,
+    required = [
+        "TRADING CODE",
+        "HIGH",
+        "LOW",
+        "VOLUME",
+    ]
+
+    for table in soup.find_all("table"):
+        rows = table_rows(
+            table
         )
 
-        response.raise_for_status()
+        if not rows:
+            continue
 
-        print(
-            "SME URL:",
-            SME_HTML_URL,
+        header_index = locate_header_row(
+            rows,
+            required,
         )
 
-        print(
-            "HTTP Status:",
-            response.status_code,
-        )
+        if header_index is None:
+            continue
 
-        print(
-            "Response Size:",
-            len(response.content),
-            "bytes",
-        )
-
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser",
-        )
-
-        tables = soup.find_all("table")
-
-        print(
-            "SME Tables Found:",
-            len(tables),
-        )
-
-        target = None
-
-        for table in tables:
-
-            text = norm(
-                table.get_text(
-                    " ",
-                    strip=True,
-                )
-            )
-
-            headers = [
-                norm(
-                    x.get_text(
-                        " ",
-                        strip=True,
-                    )
-                )
-                for x in table.find_all("th")
-            ]
-
-            if (
-                "TRADING CODE" in headers
-                or "TRADINGCODE" in headers
-                or "TRADING CODE" in text
-            ):
-                target = table
-                break
-
-        if target is None:
-            raise RuntimeError(
-                "SME table not found"
-            )
-
-        rows = target.find_all("tr")
-
-        if len(rows) < 2:
-            raise RuntimeError(
-                "SME data rows not found"
-            )
-
-        headers = [
-            x.get_text(
-                " ",
-                strip=True,
-            ).upper()
-            for x in rows[0].find_all(
-                ["th", "td"]
-            )
+        headers = rows[
+            header_index
         ]
 
-        records = []
+        if (
+            find_column(
+                headers,
+                [
+                    "LTP*",
+                    "LTP",
+                    "CLOSEP*",
+                    "CLOSE",
+                ],
+            )
+            is None
+        ):
+            continue
 
-        for row in rows[1:]:
+        target_rows = rows
+        header_row_index = header_index
+        break
 
-            values = [
-                x.get_text(
-                    " ",
-                    strip=True,
-                )
-                for x in row.find_all("td")
-            ]
+    if target_rows is None:
+        raise RuntimeError(
+            "Could not locate SME stock table."
+        )
 
-            if len(values) == len(headers):
-                records.append(values)
+    headers = target_rows[
+        header_row_index
+    ]
 
-        if not records:
-            raise RuntimeError(
-                "SME rows could not be parsed"
+    ticker_index = find_column(
+        headers,
+        [
+            "TRADING CODE",
+            "TRADINGCODE",
+        ],
+    )
+
+    date_index = find_column(
+        headers,
+        [
+            "DATE",
+            "DATE*",
+        ],
+    )
+
+    open_index = find_column(
+        headers,
+        [
+            "YCP*",
+            "YCP",
+            "OPENP*",
+            "OPEN",
+        ],
+    )
+
+    high_index = find_column(
+        headers,
+        [
+            "HIGH",
+            "HIGH*",
+        ],
+    )
+
+    low_index = find_column(
+        headers,
+        [
+            "LOW",
+            "LOW*",
+        ],
+    )
+
+    close_index = find_column(
+        headers,
+        [
+            "CLOSEP*",
+            "CLOSE",
+            "LTP*",
+            "LTP",
+        ],
+    )
+
+    volume_index = find_column(
+        headers,
+        [
+            "VOLUME",
+            "VOLUME*",
+        ],
+    )
+
+    required_indices = {
+        "ticker": ticker_index,
+        "high": high_index,
+        "low": low_index,
+        "close": close_index,
+        "volume": volume_index,
+    }
+
+    missing = [
+        name
+        for name, index in required_indices.items()
+        if index is None
+    ]
+
+    if missing:
+        raise RuntimeError(
+            "SME table missing columns: "
+            + ", ".join(missing)
+        )
+
+    records = []
+
+    for row in target_rows[
+        header_row_index + 1:
+    ]:
+        max_index = max(
+            index
+            for index in required_indices.values()
+            if index is not None
+        )
+
+        if len(row) <= max_index:
+            continue
+
+        ticker = clean_text(
+            row[ticker_index]
+        ).upper()
+
+        if not valid_ticker(
+            ticker
+        ):
+            continue
+
+        if date_index is not None:
+            row_date = parse_date_value(
+                row[date_index]
             )
 
-        df = pd.DataFrame(
-            records,
-            columns=headers,
+            if (
+                row_date is not None
+                and row_date != trading_date
+            ):
+                continue
+
+        high_value = safe_float(
+            row[high_index]
         )
 
-        ticker_col = find_column(
-            df.columns,
-            [
-                "TRADING CODE",
-                "TRADINGCODE",
-            ],
+        low_value = safe_float(
+            row[low_index]
         )
 
-        ltp_col = find_column(
-            df.columns,
-            [
-                "LTP*",
-                "LTP",
-            ],
+        close_value = safe_float(
+            row[close_index]
         )
 
-        ycp_col = find_column(
-            df.columns,
-            [
-                "YCP*",
-                "YCP",
-            ],
+        volume_value = safe_int(
+            row[volume_index]
         )
-
-        high_col = find_column(
-            df.columns,
-            ["HIGH"],
-        )
-
-        low_col = find_column(
-            df.columns,
-            ["LOW"],
-        )
-
-        close_col = find_column(
-            df.columns,
-            [
-                "CLOSEP*",
-                "CLOSEP",
-                "CLOSE",
-            ],
-        )
-
-        volume_col = find_column(
-            df.columns,
-            ["VOLUME"],
-        )
-
-        print()
-        print("SME DETECTED COLUMNS:")
-
-        print(
-            "Ticker :",
-            ticker_col,
-        )
-
-        print(
-            "LTP    :",
-            ltp_col,
-        )
-
-        print(
-            "YCP    :",
-            ycp_col,
-        )
-
-        print(
-            "High   :",
-            high_col,
-        )
-
-        print(
-            "Low    :",
-            low_col,
-        )
-
-        print(
-            "Close  :",
-            close_col,
-        )
-
-        print(
-            "Volume :",
-            volume_col,
-        )
-
-        if ticker_col is None:
-            raise RuntimeError(
-                "SME ticker column missing"
-            )
 
         if (
-            close_col is None
-            and ltp_col is None
+            high_value is None
+            or low_value is None
+            or close_value is None
+            or volume_value is None
         ):
-            raise RuntimeError(
-                "SME close/LTP column missing"
+            continue
+
+        open_value = None
+
+        if open_index is not None:
+            open_value = safe_float(
+                row[open_index]
             )
 
-        # Prefer CLOSEP* when present;
-        # otherwise LTP*.
-        source_close = (
-            close_col
-            or ltp_col
+        if open_value is None:
+            open_value = close_value
+
+        records.append(
+            [
+                ticker,
+                trading_date.strftime(
+                    DATE_FMT
+                ),
+                open_value,
+                high_value,
+                low_value,
+                close_value,
+                volume_value,
+            ]
         )
 
-        result = pd.DataFrame()
+    df = pd.DataFrame(
+        records,
+        columns=EXPECTED_COLUMNS,
+    )
 
-        result["Ticker"] = (
-            df[ticker_col]
-            .astype(str)
-            .str.strip()
-            .str.upper()
+    if df.empty:
+        raise RuntimeError(
+            "SME source returned no valid "
+            "stock records."
         )
 
-        result["Date"] = trading_date
+    df.drop_duplicates(
+        subset=["Ticker"],
+        keep="last",
+        inplace=True,
+    )
 
-        # Preserve existing SME seven-column structure.
-        if ycp_col:
-            result["Open"] = (
-                df[ycp_col]
-                .apply(safe_float)
-            )
-        else:
-            result["Open"] = (
-                df[source_close]
-                .apply(safe_float)
-            )
+    df.sort_values(
+        "Ticker",
+        inplace=True,
+    )
 
-        if high_col:
-            result["High"] = (
-                df[high_col]
-                .apply(safe_float)
-            )
-        else:
-            result["High"] = result["Open"]
+    df.reset_index(
+        drop=True,
+        inplace=True,
+    )
 
-        if low_col:
-            result["Low"] = (
-                df[low_col]
-                .apply(safe_float)
-            )
-        else:
-            result["Low"] = result["Open"]
+    print(
+        "SME Symbols:",
+        len(df),
+    )
 
-        result["Close"] = (
-            df[source_close]
-            .apply(safe_float)
-        )
-
-        if volume_col:
-            result["Volume"] = (
-                df[volume_col]
-                .apply(safe_int)
-            )
-        else:
-            result["Volume"] = 0
-
-        result = result[
-            result["Ticker"].apply(
-                valid_ticker
-            )
-        ].copy()
-
-        # NO Close=0 filter.
-        # NO Volume=0 filter.
-
-        result.drop_duplicates(
-            subset=["Ticker"],
-            keep="first",
-            inplace=True,
-        )
-
-        result.sort_values(
-            "Ticker",
-            inplace=True,
-        )
-
-        result.reset_index(
-            drop=True,
-            inplace=True,
-        )
-
-        if result.empty:
-            raise RuntimeError(
-                "SME returned zero "
-                "valid symbols"
-            )
-
-        print()
-        print(
-            "SME Close Source:",
-            source_close,
-        )
-
-        print(
-            "SME Symbols:",
-            len(result),
-        )
-
-        print(
-            "SME Trading Date:",
-            trading_date,
-        )
-
-        return result[EXPECTED_COLUMNS]
-
-    except Exception as exc:
-
-        logging.exception(
-            "SME collection failed"
-        )
-
-        print(
-            "SME ERROR:",
-            exc,
-        )
-
-        return None
+    return df
 
 
-# ================================================================
-# 3. COMBINE DSE + SME
-# ================================================================
+# ============================================================
+# COMBINE DSE + SME
+# ============================================================
 
 def combine_dse_sme(
     dse_df,
     sme_df,
 ):
+    """
+    Keep DSE and SME groups separate.
+
+    Final stock ordering:
+        DSE tickers
+        SME tickers
+
+    SME remains authoritative if a ticker appears
+    in both datasets.
+    """
+
     print()
-    print("=" * 70)
-    print("3. COMBINING DSE + SME")
-    print("=" * 70)
+    print(
+        "=" * 70
+    )
+    print(
+        "3. COMBINING DSE + SME"
+    )
+    print(
+        "=" * 70
+    )
 
     if (
         dse_df is None
@@ -1182,28 +1272,19 @@ def combine_dse_sme(
     dse = dse_df.copy()
     sme = sme_df.copy()
 
-    # Normalize ticker names.
-    dse["Ticker"] = (
-        dse["Ticker"]
-        .astype(str)
-        .str.strip()
-        .str.upper()
+    # Remove any accidental overlap.
+    # SME remains authoritative if a ticker appears
+    # in both datasets.
+    dse_before = len(
+        dse
     )
 
-    sme["Ticker"] = (
-        sme["Ticker"]
-        .astype(str)
-        .str.strip()
-        .str.upper()
-    )
-
-    # SME remains authoritative if a ticker
-    # appears in both sources.
     sme_tickers = set(
         sme["Ticker"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
     )
-
-    dse_before = len(dse)
 
     dse = dse[
         ~dse["Ticker"].isin(
@@ -1212,33 +1293,18 @@ def combine_dse_sme(
     ].copy()
 
     removed_overlap = (
-        dse_before - len(dse)
+        dse_before
+        - len(dse)
     )
 
-    # Remove duplicate tickers within
-    # each source.
-    dse.drop_duplicates(
-        subset=["Ticker"],
-        keep="first",
-        inplace=True,
-    )
-
-    sme.drop_duplicates(
-        subset=["Ticker"],
-        keep="first",
-        inplace=True,
-    )
-
-    # Sort each group independently.
+    # Sort each group alphabetically.
     dse.sort_values(
-        by="Ticker",
-        ascending=True,
+        "Ticker",
         inplace=True,
     )
 
     sme.sort_values(
-        by="Ticker",
-        ascending=True,
+        "Ticker",
         inplace=True,
     )
 
@@ -1252,9 +1318,12 @@ def combine_dse_sme(
         inplace=True,
     )
 
-    # DSE FIRST, SME SECOND.
+    # DSE first, SME second.
     combined = pd.concat(
-        [dse, sme],
+        [
+            dse,
+            sme,
+        ],
         ignore_index=True,
     )
 
@@ -1281,612 +1350,460 @@ def combine_dse_sme(
     if combined.empty:
         return None
 
-    print()
-    print("DSE FIRST TICKERS:")
-    print(
-        dse["Ticker"]
-        .head(5)
-        .tolist()
-    )
-
-    print()
-    print("DSE LAST TICKERS:")
-    print(
-        dse["Ticker"]
-        .tail(5)
-        .tolist()
-    )
-
-    print()
-    print("SME FIRST TICKERS:")
-    print(
-        sme["Ticker"]
-        .head(5)
-        .tolist()
-    )
-
-    print()
-    print("SME LAST TICKERS:")
-    print(
-        sme["Ticker"]
-        .tail(5)
-        .tolist()
-    )
-
-    return combined[EXPECTED_COLUMNS]
+    return combined[
+        EXPECTED_COLUMNS
+    ]
 
 
-# ================================================================
-# 4. LANKABANGLA DSEX / DSES / DS30 INDEX DATA
-# ================================================================
+# ============================================================
+# LANKABANGLA PRICEFILE
+# ============================================================
 
 def get_lankabangla_indices(
     trading_date,
 ):
-    print()
-    print("=" * 70)
-    print("4. LANKABANGLA DSEX / DSES / DS30")
-    print("=" * 70)
+    """
+    Get DSEX / DS30 / DSES OHLC + Volume
+    from LankaBangla PriceFile.
 
-    url = LANKABANGLA_PRICEFILE_URL.format(
-        trading_date
+    BeautifulSoup is used instead of pandas.read_html()
+    so lxml is not required.
+
+    LankaBangla returns the same market-wide volume
+    for DSEX, DSES and DS30. Therefore:
+        DSEX = actual market volume
+        DSES = 0
+        DS30 = 0
+    """
+
+    print()
+    print(
+        "=" * 70
+    )
+    print(
+        "4. LANKABANGLA INDEX DATA"
+    )
+    print(
+        "=" * 70
     )
 
-    try:
-        print(
-            "LankaBangla URL:",
-            url,
+    date_string = trading_date.strftime(
+        DATE_FMT
+    )
+
+    url = (
+        f"{LANKABANGLA_PRICEFILE_URL}"
+        f"?dateinp={date_string}"
+    )
+
+    print(
+        "URL:",
+        url,
+    )
+
+    response = requests.get(
+        url,
+        headers=LANKABANGLA_HEADERS,
+        timeout=60,
+        verify=False,
+    )
+
+    print(
+        "HTTP Status:",
+        response.status_code,
+    )
+
+    response.raise_for_status()
+
+    soup = BeautifulSoup(
+        response.text,
+        "html.parser",
+    )
+
+    target_rows = None
+    header_row_index = None
+
+    required = [
+        "SYMBOL",
+        "DATE",
+        "OPEN",
+        "HIGH",
+        "LOW",
+        "CLOSE",
+        "VOLUME",
+    ]
+
+    for table in soup.find_all("table"):
+        rows = table_rows(
+            table
         )
 
-        response = requests.get(
-            url,
-            headers=DSE_HEADERS,
-            timeout=45,
-            verify=False,
+        if not rows:
+            continue
+
+        header_index = locate_header_row(
+            rows,
+            required,
         )
 
-        response.raise_for_status()
+        if header_index is None:
+            continue
 
-        print(
-            "LankaBangla HTTP Status:",
-            response.status_code,
+        target_rows = rows
+        header_row_index = header_index
+        break
+
+    if target_rows is None:
+        raise RuntimeError(
+            "Could not locate LankaBangla "
+            "PriceFile table."
         )
 
-        print(
-            "LankaBangla Response Size:",
-            len(response.content),
-            "bytes",
+    headers = target_rows[
+        header_row_index
+    ]
+
+    symbol_index = find_column(
+        headers,
+        [
+            "SYMBOL",
+            "TRADING CODE",
+            "TRADINGCODE",
+        ],
+    )
+
+    date_index = find_column(
+        headers,
+        [
+            "DATE",
+        ],
+    )
+
+    open_index = find_column(
+        headers,
+        [
+            "OPEN",
+        ],
+    )
+
+    high_index = find_column(
+        headers,
+        [
+            "HIGH",
+        ],
+    )
+
+    low_index = find_column(
+        headers,
+        [
+            "LOW",
+        ],
+    )
+
+    close_index = find_column(
+        headers,
+        [
+            "CLOSE",
+        ],
+    )
+
+    volume_index = find_column(
+        headers,
+        [
+            "VOLUME",
+        ],
+    )
+
+    required_indices = {
+        "symbol": symbol_index,
+        "date": date_index,
+        "open": open_index,
+        "high": high_index,
+        "low": low_index,
+        "close": close_index,
+        "volume": volume_index,
+    }
+
+    missing = [
+        name
+        for name, index in required_indices.items()
+        if index is None
+    ]
+
+    if missing:
+        raise RuntimeError(
+            "LankaBangla table missing columns: "
+            + ", ".join(missing)
         )
 
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser",
+    wanted_symbols = {
+        "DSEX",
+        "DSES",
+        "DS30",
+    }
+
+    found = {}
+
+    for row in target_rows[
+        header_row_index + 1:
+    ]:
+        max_index = max(
+            index
+            for index in required_indices.values()
+            if index is not None
         )
 
-        table = soup.find(
-            "table",
-            id="pricefiletable",
+        if len(row) <= max_index:
+            continue
+
+        symbol = clean_text(
+            row[symbol_index]
+        ).upper()
+
+        if symbol not in wanted_symbols:
+            continue
+
+        row_date = parse_date_value(
+            row[date_index]
         )
 
-        if table is None:
-            raise RuntimeError(
-                "LankaBangla pricefiletable "
-                "not found"
-            )
-
-        rows = table.find_all("tr")
-
-        if len(rows) < 2:
-            raise RuntimeError(
-                "LankaBangla PriceFile "
-                "contains no data rows"
-            )
-
-        # --------------------------------------------------------
-        # Detect columns from PriceFile header.
-        # --------------------------------------------------------
-
-        header_cells = rows[0].find_all(
-            ["th", "td"]
-        )
-
-        headers = [
-            clean_text(
-                cell.get_text(
-                    " ",
-                    strip=True,
-                )
-            )
-            for cell in header_cells
-        ]
-
-        print(
-            "LankaBangla columns:",
-            headers,
-        )
-
-        normalized_headers = [
-            norm(x)
-            for x in headers
-        ]
-
-        def get_position(*names):
-            for name in names:
-                key = norm(name)
-
-                if key in normalized_headers:
-                    return normalized_headers.index(
-                        key
-                    )
-
-            return None
-
-        symbol_pos = get_position(
-            "SYMBOL"
-        )
-
-        date_pos = get_position(
-            "DATE"
-        )
-
-        open_pos = get_position(
-            "OPEN"
-        )
-
-        high_pos = get_position(
-            "HIGH"
-        )
-
-        low_pos = get_position(
-            "LOW"
-        )
-
-        close_pos = get_position(
-            "CLOSE"
-        )
-
-        volume_pos = get_position(
-            "VOLUME"
-        )
-
-        required_positions = [
-            symbol_pos,
-            date_pos,
-            open_pos,
-            high_pos,
-            low_pos,
-            close_pos,
-            volume_pos,
-        ]
-
-        if any(
-            pos is None
-            for pos in required_positions
+        if (
+            row_date is not None
+            and row_date != trading_date
         ):
-            raise RuntimeError(
-                "Required LankaBangla "
-                "columns are missing"
-            )
+            continue
 
-        # --------------------------------------------------------
-        # Extract only DSEX / DSES / DS30.
-        # --------------------------------------------------------
+        open_value = safe_float(
+            row[open_index]
+        )
 
-        wanted = {
-            "DSEX",
-            "DSES",
-            "DS30",
+        high_value = safe_float(
+            row[high_index]
+        )
+
+        low_value = safe_float(
+            row[low_index]
+        )
+
+        close_value = safe_float(
+            row[close_index]
+        )
+
+        volume_value = safe_int(
+            row[volume_index]
+        )
+
+        if (
+            open_value is None
+            or high_value is None
+            or low_value is None
+            or close_value is None
+            or volume_value is None
+        ):
+            continue
+
+        if (
+            open_value <= 0
+            or high_value <= 0
+            or low_value <= 0
+            or close_value <= 0
+        ):
+            continue
+
+        found[symbol] = {
+            "Open": open_value,
+            "High": high_value,
+            "Low": low_value,
+            "Close": close_value,
+            "Volume": volume_value,
         }
 
-        records = []
-
-        for row in rows[1:]:
-
-            cells = row.find_all("td")
-
-            if len(cells) <= max(
-                required_positions
-            ):
-                continue
-
-            values = [
-                clean_text(
-                    cell.get_text(
-                        " ",
-                        strip=True,
-                    )
-                )
-                for cell in cells
-            ]
-
-            symbol = (
-                values[symbol_pos]
-                .strip()
-                .upper()
-            )
-
-            if symbol not in wanted:
-                continue
-
-            source_date = clean_text(
-                values[date_pos]
-            )
-
-            parsed_source_date = pd.to_datetime(
-                source_date,
-                errors="coerce",
-                dayfirst=False,
-            )
-
-            if pd.isna(
-                parsed_source_date
-            ):
-                parsed_source_date = pd.to_datetime(
-                    source_date,
-                    errors="coerce",
-                    dayfirst=True,
-                )
-
-            if pd.isna(
-                parsed_source_date
-            ):
-                raise RuntimeError(
-                    f"Invalid LankaBangla date "
-                    f"for {symbol}: "
-                    f"{source_date}"
-                )
-
-            parsed_date = (
-                parsed_source_date
-                .strftime(DATE_FMT)
-            )
-
-            if parsed_date != trading_date:
-                raise RuntimeError(
-                    f"LankaBangla date mismatch "
-                    f"for {symbol}: "
-                    f"expected {trading_date}, "
-                    f"got {parsed_date}"
-                )
-
-            records.append(
-                {
-                    "Ticker": symbol,
-                    "Date": parsed_date,
-                    "Open": safe_float(
-                        values[open_pos]
-                    ),
-                    "High": safe_float(
-                        values[high_pos]
-                    ),
-                    "Low": safe_float(
-                        values[low_pos]
-                    ),
-                    "Close": safe_float(
-                        values[close_pos]
-                    ),
-                    "Volume": safe_int(
-                        values[volume_pos]
-                    ),
-                }
-            )
-
-        if not records:
-            raise RuntimeError(
-                "DSEX/DSES/DS30 not found "
-                "in LankaBangla PriceFile"
-            )
-
-        result = pd.DataFrame(
-            records
-        )
-
-        # --------------------------------------------------------
-        # Exactly one row per index.
-        # --------------------------------------------------------
-
-        if result["Ticker"].duplicated().any():
-
-            duplicates = result.loc[
-                result["Ticker"].duplicated(),
-                "Ticker",
-            ].tolist()
-
-            raise RuntimeError(
-                "Duplicate LankaBangla "
-                "index rows found: "
-                + ", ".join(duplicates)
-            )
-
-        missing = (
-            wanted
-            - set(result["Ticker"])
-        )
-
-        if missing:
-            raise RuntimeError(
-                "Missing LankaBangla indexes: "
-                + ", ".join(
-                    sorted(missing)
-                )
-            )
-
-        if len(result) != 3:
-            raise RuntimeError(
-                "Expected 3 LankaBangla "
-                f"index rows, got {len(result)}"
-            )
-
-        # --------------------------------------------------------
-        # Validate OHLC and volume.
-        # --------------------------------------------------------
-
-        for _, row in result.iterrows():
-
-            symbol = row["Ticker"]
-
-            for field in (
-                "Open",
-                "High",
-                "Low",
-                "Close",
-            ):
-
-                if (
-                    pd.isna(row[field])
-                    or row[field] <= 0
-                ):
-                    raise RuntimeError(
-                        f"Invalid {symbol} "
-                        f"{field}: "
-                        f"{row[field]}"
-                    )
-
-            if row["High"] < row["Low"]:
-                raise RuntimeError(
-                    f"Invalid {symbol}: "
-                    f"High < Low"
-                )
-
-            if not (
-                row["Low"]
-                <= row["Open"]
-                <= row["High"]
-            ):
-                raise RuntimeError(
-                    f"Invalid {symbol}: "
-                    f"Open outside "
-                    f"High/Low range"
-                )
-
-            if not (
-                row["Low"]
-                <= row["Close"]
-                <= row["High"]
-            ):
-                raise RuntimeError(
-                    f"Invalid {symbol}: "
-                    f"Close outside "
-                    f"High/Low range"
-                )
-
-            if row["Volume"] < 0:
-                raise RuntimeError(
-                    f"Invalid {symbol}: "
-                    f"negative volume"
-                )
-
-        # --------------------------------------------------------
-        # Volume convention.
-        #
-        # LankaBangla PriceFile provides the same
-        # market volume for DSEX, DSES and DS30.
-        #
-        # Keep market volume only on DSEX.
-        # DSES and DS30 receive Volume = 0.
-        # --------------------------------------------------------
-
-        result.loc[
-            result["Ticker"].isin(
-                ["DSES", "DS30"]
-            ),
-            "Volume",
-        ] = 0
-
-        result["Volume"] = (
-            result["Volume"]
-            .fillna(0)
-            .astype("int64")
-        )
-
-        # --------------------------------------------------------
-        # Standard index order.
-        #
-        # IMPORTANT:
-        # Final CSV requirement is:
-        # DSEX, DS30, DSES
-        # --------------------------------------------------------
-
-        index_order = [
+    missing_symbols = [
+        symbol
+        for symbol in (
             "DSEX",
-            "DS30",
             "DSES",
-        ]
-
-        result["Ticker"] = pd.Categorical(
-            result["Ticker"],
-            categories=index_order,
-            ordered=True,
+            "DS30",
         )
+        if symbol not in found
+    ]
 
-        result = (
-            result
-            .sort_values("Ticker")
-            .reset_index(drop=True)
-        )
-
-        result["Ticker"] = (
-            result["Ticker"]
-            .astype(str)
-        )
-
-        result = result[
-            EXPECTED_COLUMNS
-        ]
-
-        print()
-        print(
-            "LankaBangla Index Summary:"
-        )
-
-        for _, row in result.iterrows():
-
-            print(
-                f"{row['Ticker']}: "
-                f"O={row['Open']:.5f} "
-                f"H={row['High']:.5f} "
-                f"L={row['Low']:.5f} "
-                f"C={row['Close']:.5f} "
-                f"V={int(row['Volume'])}"
+    if missing_symbols:
+        raise RuntimeError(
+            "LankaBangla missing index data: "
+            + ", ".join(
+                missing_symbols
             )
-
-        print()
-        print(
-            "LankaBangla DSEX / DSES / "
-            "DS30 validation PASSED."
         )
 
-        return result
-
-    except Exception as exc:
-
-        logging.exception(
-            "LankaBangla index collection failed"
-        )
-
-        print(
-            "LANKABANGLA INDEX ERROR:",
-            exc,
-        )
-
-        return None
-
-
-# ================================================================
-# 6. FINAL DATASET
-# ================================================================
-
-def build_final_dataset(
-    stocks,
-    index_df,
-    trading_date,
-):
-    if stocks is None or stocks.empty:
+    if found["DSEX"]["Volume"] <= 0:
         raise RuntimeError(
-            "No DSE/SME stock data"
+            "LankaBangla DSEX volume is not positive."
         )
 
-    if index_df is None or index_df.empty:
-        raise RuntimeError(
-            "LankaBangla index data missing"
-        )
+    # DSEX keeps the actual market volume.
+    # DSES and DS30 are set to zero because
+    # LankaBangla returns the same market-wide volume.
+    found["DSES"]["Volume"] = 0
+    found["DS30"]["Volume"] = 0
 
-    expected = EXPECTED_COLUMNS
+    print()
+    print(
+        "LankaBangla Index Values:"
+    )
 
-    if list(stocks.columns) != expected:
-        raise RuntimeError(
-            "Unexpected stock columns: "
-            f"{list(stocks.columns)}"
-        )
-
-    if list(index_df.columns) != expected:
-        raise RuntimeError(
-            "Unexpected index columns: "
-            f"{list(index_df.columns)}"
-        )
-
-    # ------------------------------------------------------------
-    # STOCK VALIDATION
-    # ------------------------------------------------------------
-
-    if stocks["Ticker"].duplicated().any():
-        raise RuntimeError(
-            "Duplicate stock ticker found"
-        )
-
-    if not (
-        stocks["Date"].astype(str)
-        == trading_date
-    ).all():
-        raise RuntimeError(
-            "Stock date mismatch"
-        )
-
-    # ------------------------------------------------------------
-    # INDEX VALIDATION
-    # ------------------------------------------------------------
-
-    if index_df["Ticker"].duplicated().any():
-        raise RuntimeError(
-            "Duplicate index ticker found"
-        )
-
-    if not (
-        index_df["Date"].astype(str)
-        == trading_date
-    ).all():
-        raise RuntimeError(
-            "Index date mismatch"
-        )
-
-    expected_indexes = {
+    for symbol in (
         "DSEX",
         "DS30",
         "DSES",
+    ):
+        data = found[symbol]
+
+        print(
+            f"{symbol}: "
+            f"O={data['Open']} "
+            f"H={data['High']} "
+            f"L={data['Low']} "
+            f"C={data['Close']} "
+            f"V={data['Volume']}"
+        )
+
+    return {
+        "date": trading_date,
+        "indices": found,
     }
 
-    actual_indexes = set(
-        index_df["Ticker"]
+
+# ============================================================
+# FINAL DATASET
+# ============================================================
+
+def build_final_dataset(
+    stocks,
+    index_data,
+    trading_date,
+):
+    """
+    Build final CSV dataset.
+
+    Required order:
+        1. DSEX
+        2. DS30
+        3. DSES
+        4. DSE tickers
+        5. SME tickers
+    """
+
+    print()
+    print(
+        "=" * 70
+    )
+    print(
+        "5. FINAL VALIDATION"
+    )
+    print(
+        "=" * 70
     )
 
-    if actual_indexes != expected_indexes:
+    if stocks is None:
         raise RuntimeError(
-            "Index set mismatch: "
-            f"expected {expected_indexes}, "
-            f"got {actual_indexes}"
+            "Stock dataset is None."
         )
 
-    if len(index_df) != 3:
+    if stocks.empty:
         raise RuntimeError(
-            "Expected exactly 3 index rows, "
-            f"got {len(index_df)}"
+            "Stock dataset is empty."
         )
 
-    # ------------------------------------------------------------
-    # STOCK VOLUME VALIDATION
-    # ------------------------------------------------------------
-
-    if (stocks["Volume"] < 0).any():
+    if index_data is None:
         raise RuntimeError(
-            "Negative stock volume found"
+            "Index data is None."
         )
 
-    # ------------------------------------------------------------
-    # INDEX VOLUME VALIDATION
-    # ------------------------------------------------------------
-
-    if (index_df["Volume"] < 0).any():
+    if index_data.get(
+        "date"
+    ) != trading_date:
         raise RuntimeError(
-            "Negative index volume found"
+            "LankaBangla date does not match "
+            "DSE trading date."
         )
 
-    # ------------------------------------------------------------
-    # VALIDATE INDEX OHLC
-    # ------------------------------------------------------------
+    stocks = stocks.copy()
 
-    for _, row in index_df.iterrows():
+    if list(
+        stocks.columns
+    ) != EXPECTED_COLUMNS:
+        raise RuntimeError(
+            "Stock columns are incorrect: "
+            f"{list(stocks.columns)}"
+        )
 
-        symbol = row["Ticker"]
+    # Ensure exact trading date.
+    stocks["Date"] = (
+        stocks["Date"]
+        .astype(str)
+    )
+
+    expected_date_string = (
+        trading_date.strftime(
+            DATE_FMT
+        )
+    )
+
+    if not (
+        stocks["Date"]
+        == expected_date_string
+    ).all():
+        raise RuntimeError(
+            "One or more stock records have "
+            "an incorrect date."
+        )
+
+    # No duplicate stock tickers.
+    if stocks["Ticker"].duplicated().any():
+        duplicates = (
+            stocks.loc[
+                stocks["Ticker"].duplicated(),
+                "Ticker",
+            ]
+            .tolist()
+        )
+
+        raise RuntimeError(
+            "Duplicate stock tickers found: "
+            + ", ".join(
+                duplicates[:20]
+            )
+        )
+
+    # No negative volume.
+    if (
+        stocks["Volume"] < 0
+    ).any():
+        raise RuntimeError(
+            "Negative stock volume found."
+        )
+
+    # Required indices.
+    required_symbols = [
+        "DSEX",
+        "DS30",
+        "DSES",
+    ]
+
+    for symbol in required_symbols:
+        if symbol not in index_data[
+            "indices"
+        ]:
+            raise RuntimeError(
+                f"Missing index: {symbol}"
+            )
+
+    # Validate index OHLC.
+    for symbol in required_symbols:
+        data = index_data[
+            "indices"
+        ][symbol]
 
         for field in (
             "Open",
@@ -1894,101 +1811,35 @@ def build_final_dataset(
             "Low",
             "Close",
         ):
+            value = data.get(
+                field
+            )
 
             if (
-                pd.isna(row[field])
-                or row[field] <= 0
+                value is None
+                or value <= 0
             ):
                 raise RuntimeError(
-                    f"Invalid final index "
-                    f"{symbol} {field}"
+                    f"{symbol} {field} is invalid."
                 )
 
-        if row["High"] < row["Low"]:
-            raise RuntimeError(
-                f"Invalid final index "
-                f"{symbol}: High < Low"
-            )
-
-        if not (
-            row["Low"]
-            <= row["Open"]
-            <= row["High"]
-        ):
-            raise RuntimeError(
-                f"Invalid final index "
-                f"{symbol}: "
-                f"Open outside range"
-            )
-
-        if not (
-            row["Low"]
-            <= row["Close"]
-            <= row["High"]
-        ):
-            raise RuntimeError(
-                f"Invalid final index "
-                f"{symbol}: "
-                f"Close outside range"
-            )
-
-    # ------------------------------------------------------------
-    # PREVENT STOCK / INDEX COLLISION
-    # ------------------------------------------------------------
-
-    stock_index_overlap = (
-        set(stocks["Ticker"])
-        & expected_indexes
-    )
-
-    if stock_index_overlap:
+    # DSEX market volume must be positive.
+    if (
+        index_data["indices"]["DSEX"]["Volume"]
+        <= 0
+    ):
         raise RuntimeError(
-            "Stock/index ticker collision: "
-            + ", ".join(
-                sorted(
-                    stock_index_overlap
-                )
-            )
+            "DSEX market volume must be positive."
         )
 
-    # ------------------------------------------------------------
-    # FORCE EXACT INDEX ORDER
-    #
-    # DSEX
-    # DS30
-    # DSES
-    # ------------------------------------------------------------
-
-    index_order = [
-        "DSEX",
-        "DS30",
-        "DSES",
-    ]
-
-    index_df = (
-        index_df
-        .set_index("Ticker")
-        .loc[index_order]
-        .reset_index()
-    )
-
-    # ------------------------------------------------------------
-    # STOCK ORDER
-    #
-    # combine_dse_sme() already creates:
-    #
-    # DSE alphabetical
-    # SME alphabetical
-    #
-    # Do NOT globally sort here because that would mix
-    # DSE and SME groups.
-    # ------------------------------------------------------------
-
-    stocks = stocks.copy()
-
-    # ------------------------------------------------------------
-    # CREATE INDEX ROWS IN EXACT REQUIRED ORDER
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
+    # Required final CSV order:
+    #   1. DSEX
+    #   2. DS30
+    #   3. DSES
+    #   4. DSE tickers
+    #   5. SME tickers
+    # --------------------------------------------------------
 
     index_rows = []
 
@@ -1998,14 +1849,16 @@ def build_final_dataset(
         "DSES",
     ):
 
-        data = index_df[
-            index_df["Ticker"] == symbol
-        ].iloc[0]
+        data = index_data[
+            "indices"
+        ][symbol]
 
         index_rows.append(
             [
                 symbol,
-                trading_date,
+                trading_date.strftime(
+                    DATE_FMT
+                ),
                 data["Open"],
                 data["High"],
                 data["Low"],
@@ -2014,179 +1867,150 @@ def build_final_dataset(
             ]
         )
 
-    index_rows_df = pd.DataFrame(
+    index_df = pd.DataFrame(
         index_rows,
-        columns=expected,
+        columns=EXPECTED_COLUMNS,
     )
-
-    # ------------------------------------------------------------
-    # FINAL ORDER:
-    #
-    # 1. DSEX
-    # 2. DS30
-    # 3. DSES
-    # 4. DSE tickers
-    # 5. SME tickers
-    # ------------------------------------------------------------
 
     final_df = pd.concat(
         [
-            index_rows_df,
+            index_df,
             stocks,
         ],
         ignore_index=True,
     )
 
-    # ------------------------------------------------------------
-    # FINAL DUPLICATE VALIDATION
-    # ------------------------------------------------------------
-
+    # Final duplicate check.
     if final_df["Ticker"].duplicated().any():
-        raise RuntimeError(
-            "Duplicate ticker/index "
-            "in final dataset"
+        duplicates = (
+            final_df.loc[
+                final_df["Ticker"].duplicated(),
+                "Ticker",
+            ]
+            .tolist()
         )
 
-    expected_rows = len(stocks) + 3
-
-    if len(final_df) != expected_rows:
         raise RuntimeError(
-            "Final row-count validation failed: "
-            f"expected {expected_rows}, "
-            f"got {len(final_df)}"
+            "Duplicate ticker/index symbols in "
+            "final dataset: "
+            + ", ".join(
+                duplicates[:20]
+            )
         )
 
-    if (
-        final_df["Ticker"].nunique()
-        != len(final_df)
-    ):
+    if len(final_df) <= len(stocks):
         raise RuntimeError(
-            "Final dataset contains "
-            "duplicate tickers"
+            "Final dataset does not contain "
+            "the three index rows."
         )
-
-    # ------------------------------------------------------------
-    # VERIFY EXACT TOP 3 ORDER
-    # ------------------------------------------------------------
-
-    actual_top_three = (
-        final_df["Ticker"]
-        .head(3)
-        .tolist()
-    )
-
-    expected_top_three = [
-        "DSEX",
-        "DS30",
-        "DSES",
-    ]
-
-    if actual_top_three != expected_top_three:
-        raise RuntimeError(
-            "Final index order validation failed: "
-            f"expected {expected_top_three}, "
-            f"got {actual_top_three}"
-        )
-
-    # ------------------------------------------------------------
-    # FINAL ORDER CHECK
-    #
-    # Verify DSE and SME remain grouped and alphabetically
-    # sorted without assuming a fixed ticker count.
-    # ------------------------------------------------------------
-
-    stock_tickers = (
-        stocks["Ticker"]
-        .astype(str)
-        .tolist()
-    )
-
-    if stock_tickers != sorted(
-        stock_tickers
-    ):
-        raise RuntimeError(
-            "DSE + SME stock ordering validation failed"
-        )
-
-    print()
-    print("FINAL CSV ORDER:")
-    print("1. DSEX")
-    print("2. DS30")
-    print("3. DSES")
-    print("4. DSE tickers - alphabetical")
-    print("5. SME tickers - alphabetical")
-
-    print()
-    print("FIRST 10 FINAL ROWS:")
 
     print(
-        final_df.head(10).to_string(
+        "Index Rows        :",
+        len(index_df),
+    )
+
+    print(
+        "Stock Rows        :",
+        len(stocks),
+    )
+
+    print(
+        "Final Rows        :",
+        len(final_df),
+    )
+
+    print()
+    print(
+        "FIRST 10 FINAL ROWS:"
+    )
+
+    print(
+        final_df.head(
+            10
+        ).to_string(
             index=False
         )
     )
 
-    print()
-    print("LAST 10 FINAL ROWS:")
-
-    print(
-        final_df.tail(10).to_string(
-            index=False
-        )
-    )
-
-    return final_df[expected]
+    return final_df
 
 
-# ================================================================
-# 7. PUBLISH DAILY CSV ONLY
-# ================================================================
+# ============================================================
+# PUBLISH CSV
+# ============================================================
 
 def publish_daily_csv(
     final_df,
     trading_date,
 ):
-    year = trading_date[:4]
-    month = trading_date[5:7]
+    """
+    Publish:
+        data/YYYY/MM/DSE_EOD_YYYY-MM-DD.csv
 
-    directory = (
+    Uses a temporary file and atomic replace.
+    """
+
+    print()
+    print(
+        "=" * 70
+    )
+    print(
+        "6. PUBLISHING CSV"
+    )
+    print(
+        "=" * 70
+    )
+
+    year = trading_date.strftime(
+        "%Y"
+    )
+
+    month = trading_date.strftime(
+        "%m"
+    )
+
+    filename = (
+        f"DSE_EOD_"
+        f"{trading_date.strftime(DATE_FMT)}"
+        f".csv"
+    )
+
+    output_dir = (
         DATA_DIR
         / year
         / month
     )
 
-    directory.mkdir(
+    output_dir.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    daily_file = (
-        directory
-        / f"DSE_EOD_{trading_date}.csv"
+    output_path = (
+        output_dir
+        / filename
     )
 
-    temp_file = (
-        directory
-        / f".DSE_EOD_{trading_date}.csv.tmp"
+    temp_path = (
+        output_dir
+        / f".{filename}.tmp"
     )
 
     final_df.to_csv(
-        temp_file,
+        temp_path,
         index=False,
         header=False,
+        encoding="utf-8",
+        lineterminator="\n",
     )
 
-    temp_file.replace(
-        daily_file
+    temp_path.replace(
+        output_path
     )
-
-    print()
-    print("=" * 70)
-    print("CLOUD ARCHIVE PUBLISHED")
-    print("=" * 70)
 
     print(
-        "Daily CSV:",
-        daily_file,
+        "Published:",
+        output_path,
     )
 
     print(
@@ -2195,173 +2019,127 @@ def publish_daily_csv(
     )
 
     print()
-    print("INDEX SUMMARY")
-
-    for symbol in (
-        "DSEX",
-        "DS30",
-        "DSES",
-    ):
-
-        row = final_df[
-            final_df["Ticker"] == symbol
-        ].iloc[0]
-
-        print(
-            f"{symbol}: "
-            f"O={row['Open']} "
-            f"H={row['High']} "
-            f"L={row['Low']} "
-            f"C={row['Close']} "
-            f"V={row['Volume']}"
-        )
-
-    logging.info(
-        "Daily EOD published: %s | rows=%d",
-        daily_file,
-        len(final_df),
+    print(
+        "CSV ORDER:"
     )
 
-    return daily_file
+    print(
+        "1. DSEX"
+    )
+    print(
+        "2. DS30"
+    )
+    print(
+        "3. DSES"
+    )
+    print(
+        "4. DSE tickers"
+    )
+    print(
+        "5. SME tickers"
+    )
+
+    return output_path
 
 
-# ================================================================
+# ============================================================
 # COMPLETE COLLECTION
-# ================================================================
+# ============================================================
 
-def collect_and_publish():
-    # ------------------------------------------------------------
-    # Date gate
-    # ------------------------------------------------------------
+def collect_and_publish(
+    trading_date,
+):
+    """
+    Run the complete data collection and publication.
+    """
 
-    current_date = today_bd()
+    print()
+    print(
+        "#" * 70
+    )
+    print(
+        "DSE DAILY DATA COLLECTION"
+    )
+    print(
+        f"Trading Date: "
+        f"{trading_date.strftime(DATE_FMT)}"
+    )
+    print(
+        "#" * 70
+    )
+
+    # Re-check official date immediately before collection.
     official_date = (
         get_dse_official_date()
     )
 
-    if official_date is None:
+    if official_date != trading_date:
         raise RuntimeError(
-            "Could not determine official "
-            "DSE trading date"
+            "Official DSE date changed before "
+            "collection."
         )
+
+    dse_df = (
+        scrape_dse_day_end_archive(
+            trading_date
+        )
+    )
+
+    sme_df = (
+        scrape_sme_data(
+            trading_date
+        )
+    )
+
+    stocks = (
+        combine_dse_sme(
+            dse_df,
+            sme_df,
+        )
+    )
+
+    if stocks is None or stocks.empty:
+        raise RuntimeError(
+            "Combined stock dataset is empty."
+        )
+
+    index_data = (
+        get_lankabangla_indices(
+            trading_date
+        )
+    )
+
+    final_df = (
+        build_final_dataset(
+            stocks,
+            index_data,
+            trading_date,
+        )
+    )
+
+    output_path = (
+        publish_daily_csv(
+            final_df,
+            trading_date,
+        )
+    )
 
     print()
     print(
-        "Current Bangladesh Date :",
-        current_date,
+        "=" * 70
+    )
+    print(
+        "COLLECTION SUCCESS"
+    )
+    print(
+        "=" * 70
     )
 
     print(
-        "DSE Official Trading Date:",
-        official_date,
-    )
-
-    if current_date != official_date:
-
-        print()
-        print("=" * 70)
-        print("DATE GATE: STOP")
-        print("=" * 70)
-
-        print(
-            "Current date does not match "
-            "DSE official date."
-        )
-
-        print(
-            "No market data will be collected."
-        )
-
-        print(
-            "No CSV will be written."
-        )
-
-        return False
-
-    trading_date = official_date
-
-    # ------------------------------------------------------------
-    # SME source
-    # ------------------------------------------------------------
-
-    sme_df = scrape_sme_data(
-        trading_date
-    )
-
-    if sme_df is None:
-        raise RuntimeError(
-            "SME collection failed"
-        )
-
-    # ------------------------------------------------------------
-    # DSE stocks from Day End Archive
-    # ------------------------------------------------------------
-
-    dse_df = scrape_dse_day_end_archive(
-        trading_date,
-        sme_tickers=sme_df["Ticker"].tolist(),
-    )
-
-    if dse_df is None:
-        raise RuntimeError(
-            "DSE Day End Archive "
-            "collection failed"
-        )
-
-    # ------------------------------------------------------------
-    # Combine DSE + SME
-    # ------------------------------------------------------------
-
-    stocks = combine_dse_sme(
-        dse_df,
-        sme_df,
-    )
-
-    if stocks is None:
-        raise RuntimeError(
-            "DSE + SME combination failed"
-        )
-
-    # ------------------------------------------------------------
-    # LankaBangla DSEX / DSES / DS30
-    # ------------------------------------------------------------
-
-    index_df = get_lankabangla_indices(
-        trading_date
-    )
-
-    if index_df is None:
-        raise RuntimeError(
-            "LankaBangla index collection failed"
-        )
-
-    # ------------------------------------------------------------
-    # Final validation
-    # ------------------------------------------------------------
-
-    print()
-    print("=" * 70)
-    print("FINAL DATASET VALIDATION")
-    print("=" * 70)
-
-    final_df = build_final_dataset(
-        stocks,
-        index_df,
-        trading_date,
-    )
-
-    print(
-        "FINAL VALIDATION: PASSED"
-    )
-
-    print(
-        "Stock Rows:",
-        len(stocks),
-    )
-
-    print(
-        "Index Rows:",
-        len(index_df),
+        "Trading Date:",
+        trading_date.strftime(
+            DATE_FMT
+        ),
     )
 
     print(
@@ -2369,144 +2147,149 @@ def collect_and_publish():
         len(final_df),
     )
 
-    # ------------------------------------------------------------
-    # Publish only after all validation passes.
-    # ------------------------------------------------------------
-
-    daily_file = publish_daily_csv(
-        final_df,
-        trading_date,
-    )
-
-    print()
-    print("=" * 70)
     print(
-        "DSE + SME + DSEX/DSES/DS30 COMPLETE"
-    )
-    print("=" * 70)
-
-    print(
-        "Official Trading Date:",
-        trading_date,
+        "CSV:",
+        output_path,
     )
 
-    print(
-        "Daily CSV:",
-        daily_file,
-    )
-
-    print("DONE")
-
-    return True
+    return output_path
 
 
-# ================================================================
-# WAIT / RETRY CONTROL
-# ================================================================
+# ============================================================
+# TIME HELPERS
+# ============================================================
 
-def seconds_until(time_value):
+def seconds_until(
+    target_time,
+):
+    """
+    Seconds from now until today's target time
+    in Bangladesh timezone.
+
+    Returns 0 if target time has already passed.
+    """
+
     current = now_bd()
 
-    target = current.replace(
-        hour=time_value.hour,
-        minute=time_value.minute,
-        second=0,
-        microsecond=0,
+    target = datetime.combine(
+        current.date(),
+        target_time,
+        tzinfo=BD_TZ,
     )
 
-    if target <= current:
-        return 0
-
-    return (
-        target - current
+    delta = (
+        target
+        - current
     ).total_seconds()
 
-
-def run_normal():
-    # Date is checked immediately.
-
-    current_date = today_bd()
-
-    official_date = (
-        get_dse_official_date()
+    return max(
+        0,
+        delta,
     )
 
-    if official_date is None:
 
-        print(
-            "Unable to determine "
-            "DSE date. STOP."
+def wait_until(
+    target_time,
+):
+    """
+    Wait until Bangladesh local target time.
+    """
+
+    while True:
+        current = now_bd()
+
+        target = datetime.combine(
+            current.date(),
+            target_time,
+            tzinfo=BD_TZ,
         )
 
-        return 1
+        remaining = (
+            target
+            - current
+        ).total_seconds()
 
-    print()
-    print(
-        "Current Bangladesh Date :",
-        current_date,
-    )
-
-    print(
-        "DSE Official Trading Date:",
-        official_date,
-    )
-
-    # This is the ONLY trading-day gate.
-
-    if current_date != official_date:
-
-        print()
-        print("=" * 70)
-        print("DATE GATE: STOP")
-        print("=" * 70)
+        if remaining <= 0:
+            return
 
         print(
-            "DSE official date does not "
-            "match today's date."
-        )
-
-        print(
-            "No collection."
-        )
-
-        return 0
-
-    # If launched before 2:40 PM,
-    # wait until 2:40 PM.
-
-    wait_seconds = seconds_until(
-        FEED_TIME
-    )
-
-    if wait_seconds > 0:
-
-        print()
-        print("=" * 70)
-        print(
-            "DATE MATCHED - "
-            "WAITING FOR 2:40 PM"
-        )
-        print("=" * 70)
-
-        print(
-            "Bangladesh Time:",
-            now_bd().strftime(
-                "%I:%M:%S %p"
-            ),
-        )
-
-        print(
-            "Scheduled feed : 02:40 PM"
+            f"Waiting until "
+            f"{target_time.strftime('%H:%M')} "
+            f"BD time. "
+            f"Remaining: "
+            f"{int(remaining)} seconds"
         )
 
         time.sleep(
-            wait_seconds
+            min(
+                remaining,
+                30,
+            )
         )
 
-    # ------------------------------------------------------------
-    # Attempt 1: 2:40 PM
-    # Attempt 2: 2:45 PM if needed
-    # ------------------------------------------------------------
+
+# ============================================================
+# NORMAL RUN
+# ============================================================
+
+def run_normal():
+    """
+    Normal production workflow.
+
+    1. Date gate.
+    2. Wait until 14:40 if needed.
+    3. Attempt collection.
+    4. Retry once at 14:45.
+    """
+
+    print()
+    print(
+        "=" * 70
+    )
+    print(
+        "DSE CLOUD FEEDER"
+    )
+    print(
+        "=" * 70
+    )
+
+    current = now_bd()
+
+    print(
+        "Bangladesh Time:",
+        current.strftime(
+            "%Y-%m-%d %H:%M:%S %Z"
+        ),
+    )
+
+    # --------------------------------------------------------
+    # DATE GATE
+    # --------------------------------------------------------
+
+    trading_date = (
+        date_gate_only()
+    )
+
+    if trading_date is None:
+        return 0
+
+    # --------------------------------------------------------
+    # WAIT UNTIL 14:40
+    # --------------------------------------------------------
+
+    if now_bd().time() < FEED_TIME:
+        print()
+        print(
+            "Before 2:40 PM."
+        )
+
+        wait_until(
+            FEED_TIME
+        )
+
+    # --------------------------------------------------------
+    # ATTEMPT 1
+    # --------------------------------------------------------
 
     for attempt in range(
         1,
@@ -2515,129 +2298,124 @@ def run_normal():
 
         print()
         print(
-            f"========== EOD ATTEMPT "
-            f"{attempt}/{MAX_ATTEMPTS} =========="
+            "=" * 70
+        )
+        print(
+            f"COLLECTION ATTEMPT "
+            f"{attempt}/{MAX_ATTEMPTS}"
+        )
+        print(
+            "=" * 70
         )
 
         try:
-
-            # Re-check date immediately
-            # before collection.
-
+            # Re-check local date.
             current_date = today_bd()
 
+            if current_date != trading_date:
+                print(
+                    "Date changed. Stopping."
+                )
+                return 0
+
+            # Re-check official DSE date.
             official_date = (
                 get_dse_official_date()
             )
 
-            if official_date is None:
-                raise RuntimeError(
-                    "Could not determine "
-                    "DSE official date"
-                )
-
-            if (
-                current_date
-                != official_date
-            ):
-
+            if official_date != trading_date:
                 print(
-                    "DATE GATE CHANGED: STOP"
+                    "Official DSE date no longer "
+                    "matches target date. Stopping."
                 )
-
                 return 0
 
-            if collect_and_publish():
-                return 0
+            collect_and_publish(
+                trading_date
+            )
+
+            return 0
 
         except Exception as exc:
-
-            logging.exception(
-                "EOD attempt %d failed",
+            logger.exception(
+                "Collection attempt %s failed.",
                 attempt,
             )
 
             print()
             print(
-                "ATTEMPT FAILED:",
-                exc,
+                f"ATTEMPT {attempt} FAILED:"
             )
 
-        if attempt == 1:
-
-            wait_seconds = seconds_until(
-                RETRY_TIME
+            print(
+                str(exc)
             )
+
+            if attempt >= MAX_ATTEMPTS:
+                print()
+                print(
+                    "SECOND ATTEMPT FAILED."
+                )
+
+                print(
+                    "Stopping without publishing "
+                    "another CSV."
+                )
+
+                return 1
+
+            # ------------------------------------------------
+            # WAIT UNTIL 14:45 FOR RETRY
+            # ------------------------------------------------
 
             print()
-            print("=" * 70)
-            print("FIRST ATTEMPT FAILED")
-            print("=" * 70)
+            print(
+                "Retry scheduled for 2:45 PM."
+            )
 
-            if wait_seconds > 0:
-
-                print(
-                    "Retrying at 02:45 PM..."
+            if now_bd().time() < RETRY_TIME:
+                wait_until(
+                    RETRY_TIME
                 )
-
-                time.sleep(
-                    wait_seconds
-                )
-
-            else:
-
-                print(
-                    "2:45 PM has passed; "
-                    "performing the single "
-                    "retry now."
-                )
-
-    print()
-    print("=" * 70)
-    print("CLOUD FEEDER FAILED")
-    print("=" * 70)
-
-    print(
-        "No new daily CSV was published."
-    )
 
     return 1
 
 
-# ================================================================
+# ============================================================
 # MAIN
-# ================================================================
+# ============================================================
 
 def main():
+    setup_logging()
+
     parser = argparse.ArgumentParser(
         description=(
-            "DSE + SME + DSEX/DSES/DS30 "
-            "daily EOD cloud feeder"
+            "DSE daily EOD cloud feeder"
         )
     )
 
     parser.add_argument(
-        "--check-date",
+        "--now",
         action="store_true",
         help=(
-            "Check current Bangladesh date "
-            "against DSE official date only."
+            "Run normal production workflow."
         ),
     )
 
     args = parser.parse_args()
 
-    if args.check_date:
-        return date_gate_only()
-
+    # Default behavior is normal run.
     return run_normal()
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(
+        main()
+    )
 '''
 
 path = Path("/mnt/data/dse_cloud_feeder.py")
 path.write_text(content, encoding="utf-8")
+
 print(f"Created: {path}")
 print(f"Size: {path.stat().st_size:,} bytes")
