@@ -328,14 +328,27 @@ def combine_dse_sme(dse_df, sme_df):
     print("=" * 70)
     if dse_df is None or sme_df is None:
         return None
-    combined = pd.concat([dse_df, sme_df], ignore_index=True)
-    before = len(combined)
-    combined.drop_duplicates(subset=["Ticker"], keep="last", inplace=True)
-    print("DSE Symbols       :", len(dse_df))
-    print("SME Symbols       :", len(sme_df))
-    print("Duplicates Removed:", before - len(combined))
-    combined.sort_values("Ticker", inplace=True)
-    combined.reset_index(drop=True, inplace=True)
+    # Keep DSE and SME groups separate. SME remains authoritative
+    # if a ticker appears in both datasets.
+    dse = dse_df.copy()
+    sme = sme_df.copy()
+
+    before = len(dse)
+    sme_tickers = set(sme["Ticker"].astype(str).str.strip().str.upper())
+    dse = dse[~dse["Ticker"].isin(sme_tickers)].copy()
+    removed_overlap = before - len(dse)
+
+    dse.sort_values("Ticker", inplace=True)
+    sme.sort_values("Ticker", inplace=True)
+    dse.reset_index(drop=True, inplace=True)
+    sme.reset_index(drop=True, inplace=True)
+
+    # Required stock order: DSE tickers first, SME tickers second.
+    combined = pd.concat([dse, sme], ignore_index=True)
+
+    print("DSE Symbols       :", len(dse))
+    print("SME Symbols       :", len(sme))
+    print("Duplicates Removed:", removed_overlap)
     print("Combined Symbols  :", len(combined))
     if combined.empty:
         return None
@@ -461,11 +474,15 @@ def build_final_dataset(stocks, lankabangla_indices, trading_date):
                 raise RuntimeError(f"Invalid LankaBangla {symbol} {field}")
     if indices["DSEX"]["Volume"] <= 0:
         raise RuntimeError("Invalid DSEX market volume")
+    # Required final CSV order:
+    # DSEX, DS30, DSES, DSE tickers, SME tickers.
     index_rows = []
-    for symbol in ("DSEX", "DSES", "DS30"):
+    for symbol in ("DSEX", "DS30", "DSES"):
         d = indices[symbol]
         index_rows.append([symbol, trading_date, d["Open"], d["High"], d["Low"], d["Close"], d["Volume"]])
-    final_df = pd.concat([stocks, pd.DataFrame(index_rows, columns=expected)], ignore_index=True)
+
+    index_df = pd.DataFrame(index_rows, columns=expected)
+    final_df = pd.concat([index_df, stocks], ignore_index=True)
     if final_df["Ticker"].duplicated().any():
         raise RuntimeError("Duplicate ticker/index in final dataset")
     if len(final_df) <= len(stocks):
