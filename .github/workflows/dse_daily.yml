@@ -64,13 +64,14 @@ jobs:
           echo "GENERATED DSE DATA"
           echo "========================================"
 
-          find . -maxdepth 3 -type f -name "DSE_EOD_*.csv" \
+          find . -type f -name "DSE_EOD_*.csv" \
             -not -path "./DSEX/*" \
             -print | sort
 
-          if ! find . -maxdepth 3 -type f -name "DSE_EOD_*.csv" \
+          if ! find . -type f -name "DSE_EOD_*.csv" \
             -not -path "./DSEX/*" | grep -q .; then
             echo "ERROR: No newly generated DSE EOD CSV was found."
+            echo "Expected pattern: YYYY/MM/DSE_EOD_YYYY-MM-DD.csv"
             exit 1
           fi
 
