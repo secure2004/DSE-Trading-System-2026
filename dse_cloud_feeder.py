@@ -16,7 +16,7 @@
 #   -> Combine DSE + SME
 #   -> LankaBangla: DSEX / DSES / DS30
 #   -> Final validation
-#   -> data/YYYY/MM/DSE_EOD_YYYY-MM-DD.csv
+#   -> YYYY/MM/DSE_EOD_YYYY-MM-DD.csv
 #
 # 2:40 failure -> retry once at 2:45 PM -> failure = STOP
 #
@@ -58,7 +58,7 @@ from bs4 import BeautifulSoup
 # ================================================================
 
 PROJECT_DIR = Path(__file__).resolve().parent
-DATA_DIR = PROJECT_DIR.parent
+DATA_DIR = PROJECT_DIR
 LOG_FILE = PROJECT_DIR / "dse_data_feeder.log"
 
 DSE_MARKET_API_URL = "https://www.dsebd.org/api/live/market"
