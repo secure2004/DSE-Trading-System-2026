@@ -997,4 +997,1368 @@ def combine_dse_sme(
         len(dse),
     )
 
+    print(        "SME Symbols       :",
+        len(sme),
+    )
+
     print(
+        "Duplicates Removed:",
+        removed_overlap,
+    )
+
+    print(
+        "Combined Symbols  :",
+        len(combined),
+    )
+
+    if combined.empty:
+        return None
+
+    print()
+    print("DSE FIRST TICKERS:")
+    print(
+        dse["Ticker"]
+        .head(5)
+        .tolist()
+    )
+
+    print()
+    print("DSE LAST TICKERS:")
+    print(
+        dse["Ticker"]
+        .tail(5)
+        .tolist()
+    )
+
+    print()
+    print("SME FIRST TICKERS:")
+    print(
+        sme["Ticker"]
+        .head(5)
+        .tolist()
+    )
+
+    print()
+    print("SME LAST TICKERS:")
+    print(
+        sme["Ticker"]
+        .tail(5)
+        .tolist()
+    )
+
+    return combined[EXPECTED_COLUMNS]
+
+
+# ================================================================
+# 4. LANKABANGLA DSEX / DSES / DS30 INDEX DATA
+# ================================================================
+
+def get_lankabangla_indices(
+    trading_date,
+):
+    print()
+    print("=" * 70)
+    print("4. LANKABANGLA DSEX / DSES / DS30")
+    print("=" * 70)
+
+    url = LANKABANGLA_PRICEFILE_URL.format(
+        trading_date
+    )
+
+    try:
+        print(
+            "LankaBangla URL:",
+            url,
+        )
+
+        response = requests.get(
+            url,
+            headers=DSE_HEADERS,
+            timeout=45,
+            verify=False,
+        )
+
+        response.raise_for_status()
+
+        print(
+            "LankaBangla HTTP Status:",
+            response.status_code,
+        )
+
+        print(
+            "LankaBangla Response Size:",
+            len(response.content),
+            "bytes",
+        )
+
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser",
+        )
+
+        table = soup.find(
+            "table",
+            id="pricefiletable",
+        )
+
+        if table is None:
+            raise RuntimeError(
+                "LankaBangla pricefiletable "
+                "not found"
+            )
+
+        rows = table.find_all("tr")
+
+        if len(rows) < 2:
+            raise RuntimeError(
+                "LankaBangla PriceFile "
+                "contains no data rows"
+            )
+
+        # --------------------------------------------------------
+        # Detect columns from PriceFile header.
+        # --------------------------------------------------------
+
+        header_cells = rows[0].find_all(
+            ["th", "td"]
+        )
+
+        headers = [
+            clean_text(
+                cell.get_text(
+                    " ",
+                    strip=True,
+                )
+            )
+            for cell in header_cells
+        ]
+
+        print(
+            "LankaBangla columns:",
+            headers,
+        )
+
+        normalized_headers = [
+            norm(x)
+            for x in headers
+        ]
+
+        def get_position(*names):
+            for name in names:
+                key = norm(name)
+
+                if key in normalized_headers:
+                    return normalized_headers.index(
+                        key
+                    )
+
+            return None
+
+        symbol_pos = get_position(
+            "SYMBOL"
+        )
+
+        date_pos = get_position(
+            "DATE"
+        )
+
+        open_pos = get_position(
+            "OPEN"
+        )
+
+        high_pos = get_position(
+            "HIGH"
+        )
+
+        low_pos = get_position(
+            "LOW"
+        )
+
+        close_pos = get_position(
+            "CLOSE"
+        )
+
+        volume_pos = get_position(
+            "VOLUME"
+        )
+
+        required_positions = [
+            symbol_pos,
+            date_pos,
+            open_pos,
+            high_pos,
+            low_pos,
+            close_pos,
+            volume_pos,
+        ]
+
+        if any(
+            pos is None
+            for pos in required_positions
+        ):
+            raise RuntimeError(
+                "Required LankaBangla "
+                "columns are missing"
+            )
+
+        # --------------------------------------------------------
+        # Extract only DSEX / DSES / DS30.
+        # --------------------------------------------------------
+
+        wanted = {
+            "DSEX",
+            "DSES",
+            "DS30",
+        }
+
+        records = []
+
+        for row in rows[1:]:
+
+            cells = row.find_all("td")
+
+            if len(cells) <= max(
+                required_positions
+            ):
+                continue
+
+            values = [
+                clean_text(
+                    cell.get_text(
+                        " ",
+                        strip=True,
+                    )
+                )
+                for cell in cells
+            ]
+
+            symbol = (
+                values[symbol_pos]
+                .strip()
+                .upper()
+            )
+
+            if symbol not in wanted:
+                continue
+
+            source_date = clean_text(
+                values[date_pos]
+            )
+
+            parsed_source_date = pd.to_datetime(
+                source_date,
+                errors="coerce",
+                dayfirst=False,
+            )
+
+            if pd.isna(
+                parsed_source_date
+            ):
+                parsed_source_date = pd.to_datetime(
+                    source_date,
+                    errors="coerce",
+                    dayfirst=True,
+                )
+
+            if pd.isna(
+                parsed_source_date
+            ):
+                raise RuntimeError(
+                    f"Invalid LankaBangla date "
+                    f"for {symbol}: "
+                    f"{source_date}"
+                )
+
+            parsed_date = (
+                parsed_source_date
+                .strftime(DATE_FMT)
+            )
+
+            if parsed_date != trading_date:
+                raise RuntimeError(
+                    f"LankaBangla date mismatch "
+                    f"for {symbol}: "
+                    f"expected {trading_date}, "
+                    f"got {parsed_date}"
+                )
+
+            records.append(
+                {
+                    "Ticker": symbol,
+                    "Date": parsed_date,
+                    "Open": safe_float(
+                        values[open_pos]
+                    ),
+                    "High": safe_float(
+                        values[high_pos]
+                    ),
+                    "Low": safe_float(
+                        values[low_pos]
+                    ),
+                    "Close": safe_float(
+                        values[close_pos]
+                    ),
+                    "Volume": safe_int(
+                        values[volume_pos]
+                    ),
+                }
+            )
+
+        if not records:
+            raise RuntimeError(
+                "DSEX/DSES/DS30 not found "
+                "in LankaBangla PriceFile"
+            )
+
+        result = pd.DataFrame(
+            records
+        )
+
+        # --------------------------------------------------------
+        # Exactly one row per index.
+        # --------------------------------------------------------
+
+        if result["Ticker"].duplicated().any():
+
+            duplicates = result.loc[
+                result["Ticker"].duplicated(),
+                "Ticker",
+            ].tolist()
+
+            raise RuntimeError(
+                "Duplicate LankaBangla "
+                "index rows found: "
+                + ", ".join(duplicates)
+            )
+
+        missing = (
+            wanted
+            - set(result["Ticker"])
+        )
+
+        if missing:
+            raise RuntimeError(
+                "Missing LankaBangla indexes: "
+                + ", ".join(
+                    sorted(missing)
+                )
+            )
+
+        if len(result) != 3:
+            raise RuntimeError(
+                "Expected 3 LankaBangla "
+                f"index rows, got {len(result)}"
+            )
+
+        # --------------------------------------------------------
+        # Validate OHLC and volume.
+        # --------------------------------------------------------
+
+        for _, row in result.iterrows():
+
+            symbol = row["Ticker"]
+
+            for field in (
+                "Open",
+                "High",
+                "Low",
+                "Close",
+            ):
+
+                if (
+                    pd.isna(row[field])
+                    or row[field] <= 0
+                ):
+                    raise RuntimeError(
+                        f"Invalid {symbol} "
+                        f"{field}: "
+                        f"{row[field]}"
+                    )
+
+            if row["High"] < row["Low"]:
+                raise RuntimeError(
+                    f"Invalid {symbol}: "
+                    f"High < Low"
+                )
+
+            if not (
+                row["Low"]
+                <= row["Open"]
+                <= row["High"]
+            ):
+                raise RuntimeError(
+                    f"Invalid {symbol}: "
+                    f"Open outside "
+                    f"High/Low range"
+                )
+
+            if not (
+                row["Low"]
+                <= row["Close"]
+                <= row["High"]
+            ):
+                raise RuntimeError(
+                    f"Invalid {symbol}: "
+                    f"Close outside "
+                    f"High/Low range"
+                )
+
+            if row["Volume"] < 0:
+                raise RuntimeError(
+                    f"Invalid {symbol}: "
+                    f"negative volume"
+                )
+
+        # --------------------------------------------------------
+        # Volume convention.
+        #
+        # LankaBangla PriceFile provides the same
+        # market volume for DSEX, DSES and DS30.
+        #
+        # Keep market volume only on DSEX.
+        # DSES and DS30 receive Volume = 0.
+        # --------------------------------------------------------
+
+        result.loc[
+            result["Ticker"].isin(
+                ["DSES", "DS30"]
+            ),
+            "Volume",
+        ] = 0
+
+        result["Volume"] = (
+            result["Volume"]
+            .fillna(0)
+            .astype("int64")
+        )
+
+        # --------------------------------------------------------
+        # Standard index order.
+        #
+        # IMPORTANT:
+        # Final CSV requirement is:
+        # DSEX, DS30, DSES
+        # --------------------------------------------------------
+
+        index_order = [
+            "DSEX",
+            "DS30",
+            "DSES",
+        ]
+
+        result["Ticker"] = pd.Categorical(
+            result["Ticker"],
+            categories=index_order,
+            ordered=True,
+        )
+
+        result = (
+            result
+            .sort_values("Ticker")
+            .reset_index(drop=True)
+        )
+
+        result["Ticker"] = (
+            result["Ticker"]
+            .astype(str)
+        )
+
+        result = result[
+            EXPECTED_COLUMNS
+        ]
+
+        print()
+        print(
+            "LankaBangla Index Summary:"
+        )
+
+        for _, row in result.iterrows():
+
+            print(
+                f"{row['Ticker']}: "
+                f"O={row['Open']:.5f} "
+                f"H={row['High']:.5f} "
+                f"L={row['Low']:.5f} "
+                f"C={row['Close']:.5f} "
+                f"V={int(row['Volume'])}"
+            )
+
+        print()
+        print(
+            "LankaBangla DSEX / DSES / "
+            "DS30 validation PASSED."
+        )
+
+        return result
+
+    except Exception as exc:
+
+        logging.exception(
+            "LankaBangla index collection failed"
+        )
+
+        print(
+            "LANKABANGLA INDEX ERROR:",
+            exc,
+        )
+
+        return None
+
+
+# ================================================================
+# 6. FINAL DATASET
+# ================================================================
+
+def build_final_dataset(
+    stocks,
+    index_df,
+    trading_date,
+):
+    if stocks is None or stocks.empty:
+        raise RuntimeError(
+            "No DSE/SME stock data"
+        )
+
+    if index_df is None or index_df.empty:
+        raise RuntimeError(
+            "LankaBangla index data missing"
+        )
+
+    expected = EXPECTED_COLUMNS
+
+    if list(stocks.columns) != expected:
+        raise RuntimeError(
+            "Unexpected stock columns: "
+            f"{list(stocks.columns)}"
+        )
+
+    if list(index_df.columns) != expected:
+        raise RuntimeError(
+            "Unexpected index columns: "
+            f"{list(index_df.columns)}"
+        )
+
+    # ------------------------------------------------------------
+    # STOCK VALIDATION
+    # ------------------------------------------------------------
+
+    if stocks["Ticker"].duplicated().any():
+        raise RuntimeError(
+            "Duplicate stock ticker found"
+        )
+
+    if not (
+        stocks["Date"].astype(str)
+        == trading_date
+    ).all():
+        raise RuntimeError(
+            "Stock date mismatch"
+        )
+
+    # ------------------------------------------------------------
+    # INDEX VALIDATION
+    # ------------------------------------------------------------
+
+    if index_df["Ticker"].duplicated().any():
+        raise RuntimeError(
+            "Duplicate index ticker found"
+        )
+
+    if not (
+        index_df["Date"].astype(str)
+        == trading_date
+    ).all():
+        raise RuntimeError(
+            "Index date mismatch"
+        )
+
+    expected_indexes = {
+        "DSEX",
+        "DS30",
+        "DSES",
+    }
+
+    actual_indexes = set(
+        index_df["Ticker"]
+    )
+
+    if actual_indexes != expected_indexes:
+        raise RuntimeError(
+            "Index set mismatch: "
+            f"expected {expected_indexes}, "
+            f"got {actual_indexes}"
+        )
+
+    if len(index_df) != 3:
+        raise RuntimeError(
+            "Expected exactly 3 index rows, "
+            f"got {len(index_df)}"
+        )
+
+    # ------------------------------------------------------------
+    # STOCK VOLUME VALIDATION
+    # ------------------------------------------------------------
+
+    if (stocks["Volume"] < 0).any():
+        raise RuntimeError(
+            "Negative stock volume found"
+        )
+
+    # ------------------------------------------------------------
+    # INDEX VOLUME VALIDATION
+    # ------------------------------------------------------------
+
+    if (index_df["Volume"] < 0).any():
+        raise RuntimeError(
+            "Negative index volume found"
+        )
+
+    # ------------------------------------------------------------
+    # VALIDATE INDEX OHLC
+    # ------------------------------------------------------------
+
+    for _, row in index_df.iterrows():
+
+        symbol = row["Ticker"]
+
+        for field in (
+            "Open",
+            "High",
+            "Low",
+            "Close",
+        ):
+
+            if (
+                pd.isna(row[field])
+                or row[field] <= 0
+            ):
+                raise RuntimeError(
+                    f"Invalid final index "
+                    f"{symbol} {field}"
+                )
+
+        if row["High"] < row["Low"]:
+            raise RuntimeError(
+                f"Invalid final index "
+                f"{symbol}: High < Low"
+            )
+
+        if not (
+            row["Low"]
+            <= row["Open"]
+            <= row["High"]
+        ):
+            raise RuntimeError(
+                f"Invalid final index "
+                f"{symbol}: "
+                f"Open outside range"
+            )
+
+        if not (
+            row["Low"]
+            <= row["Close"]
+            <= row["High"]
+        ):
+            raise RuntimeError(
+                f"Invalid final index "
+                f"{symbol}: "
+                f"Close outside range"
+            )
+
+    # ------------------------------------------------------------
+    # PREVENT STOCK / INDEX COLLISION
+    # ------------------------------------------------------------
+
+    stock_index_overlap = (
+        set(stocks["Ticker"])
+        & expected_indexes
+    )
+
+    if stock_index_overlap:
+        raise RuntimeError(
+            "Stock/index ticker collision: "
+            + ", ".join(
+                sorted(
+                    stock_index_overlap
+                )
+            )
+        )
+
+    # ------------------------------------------------------------
+    # FORCE EXACT INDEX ORDER
+    #
+    # DSEX
+    # DS30
+    # DSES
+    # ------------------------------------------------------------
+
+    index_order = [
+        "DSEX",
+        "DS30",
+        "DSES",
+    ]
+
+    index_df = (
+        index_df
+        .set_index("Ticker")
+        .loc[index_order]
+        .reset_index()
+    )
+
+    # ------------------------------------------------------------
+    # STOCK ORDER
+    #
+    # combine_dse_sme() already creates:
+    #
+    # DSE alphabetical
+    # SME alphabetical
+    #
+    # Do NOT globally sort here because that would mix
+    # DSE and SME groups.
+    # ------------------------------------------------------------
+
+    stocks = stocks.copy()
+
+    # ------------------------------------------------------------
+    # CREATE INDEX ROWS IN EXACT REQUIRED ORDER
+    # ------------------------------------------------------------
+
+    index_rows = []
+
+    for symbol in (
+        "DSEX",
+        "DS30",
+        "DSES",
+    ):
+
+        data = index_df[
+            index_df["Ticker"] == symbol
+        ].iloc[0]
+
+        index_rows.append(
+            [
+                symbol,
+                trading_date,
+                data["Open"],
+                data["High"],
+                data["Low"],
+                data["Close"],
+                data["Volume"],
+            ]
+        )
+
+    index_rows_df = pd.DataFrame(
+        index_rows,
+        columns=expected,
+    )
+
+    # ------------------------------------------------------------
+    # FINAL ORDER:
+    #
+    # 1. DSEX
+    # 2. DS30
+    # 3. DSES
+    # 4. DSE tickers
+    # 5. SME tickers
+    # ------------------------------------------------------------
+
+    final_df = pd.concat(
+        [
+            index_rows_df,
+            stocks,
+        ],
+        ignore_index=True,
+    )
+
+    # ------------------------------------------------------------
+    # FINAL DUPLICATE VALIDATION
+    # ------------------------------------------------------------
+
+    if final_df["Ticker"].duplicated().any():
+        raise RuntimeError(
+            "Duplicate ticker/index "
+            "in final dataset"
+        )
+
+    expected_rows = len(stocks) + 3
+
+    if len(final_df) != expected_rows:
+        raise RuntimeError(
+            "Final row-count validation failed: "
+            f"expected {expected_rows}, "
+            f"got {len(final_df)}"
+        )
+
+    if (
+        final_df["Ticker"].nunique()
+        != len(final_df)
+    ):
+        raise RuntimeError(
+            "Final dataset contains "
+            "duplicate tickers"
+        )
+
+    # ------------------------------------------------------------
+    # VERIFY EXACT TOP 3 ORDER
+    # ------------------------------------------------------------
+
+    actual_top_three = (
+        final_df["Ticker"]
+        .head(3)
+        .tolist()
+    )
+
+    expected_top_three = [
+        "DSEX",
+        "DS30",
+        "DSES",
+    ]
+
+    if actual_top_three != expected_top_three:
+        raise RuntimeError(
+            "Final index order validation failed: "
+            f"expected {expected_top_three}, "
+            f"got {actual_top_three}"
+        )
+
+    # ------------------------------------------------------------
+    # FINAL ORDER CHECK
+    #
+    # Do NOT globally sort or validate the combined DSE + SME
+    # ticker list. The required structure is intentionally:
+    #
+    # DSE tickers - alphabetical
+    # SME tickers - alphabetical
+    #
+    # Therefore the transition from the last DSE ticker to the
+    # first SME ticker is not expected to be globally alphabetical.
+    #
+    # combine_dse_sme() already sorts each group independently.
+    # ------------------------------------------------------------
+
+    print()
+    print("FINAL CSV ORDER VALIDATION: PASSED")
+    print("1. DSEX")
+    print("2. DS30")
+    print("3. DSES")
+    print("4. DSE tickers - alphabetical")
+    print("5. SME tickers - alphabetical")
+
+    print()
+    print("FIRST 10 FINAL ROWS:")
+
+    print(
+        final_df.head(10).to_string(
+            index=False
+        )
+    )
+
+    print()
+    print("LAST 10 FINAL ROWS:")
+
+    print(
+        final_df.tail(10).to_string(
+            index=False
+        )
+    )
+
+    return final_df[expected]
+
+
+# ================================================================
+# 7. PUBLISH DAILY CSV ONLY
+# ================================================================
+
+def publish_daily_csv(
+    final_df,
+    trading_date,
+):
+    year = trading_date[:4]
+    month = trading_date[5:7]
+
+    directory = (
+        DATA_DIR
+        / year
+        / month
+    )
+
+    directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    daily_file = (
+        directory
+        / f"DSE_EOD_{trading_date}.csv"
+    )
+
+    temp_file = (
+        directory
+        / f".DSE_EOD_{trading_date}.csv.tmp"
+    )
+
+    final_df.to_csv(
+        temp_file,
+        index=False,
+        header=False,
+    )
+
+    temp_file.replace(
+        daily_file
+    )
+
+    print()
+    print("=" * 70)
+    print("CLOUD ARCHIVE PUBLISHED")
+    print("=" * 70)
+
+    print(
+        "Daily CSV:",
+        daily_file,
+    )
+
+    print(
+        "Rows:",
+        len(final_df),
+    )
+
+    print()
+    print("INDEX SUMMARY")
+
+    for symbol in (
+        "DSEX",
+        "DS30",
+        "DSES",
+    ):
+
+        row = final_df[
+            final_df["Ticker"] == symbol
+        ].iloc[0]
+
+        print(
+            f"{symbol}: "
+            f"O={row['Open']} "
+            f"H={row['High']} "
+            f"L={row['Low']} "
+            f"C={row['Close']} "
+            f"V={row['Volume']}"
+        )
+
+    logging.info(
+        "Daily EOD published: %s | rows=%d",
+        daily_file,
+        len(final_df),
+    )
+
+    return daily_file
+
+
+# ================================================================
+# COMPLETE COLLECTION
+# ================================================================
+
+def collect_and_publish():
+    # ------------------------------------------------------------
+    # Date gate
+    # ------------------------------------------------------------
+
+    current_date = today_bd()
+    official_date = (
+        get_dse_official_date()
+    )
+
+    if official_date is None:
+        raise RuntimeError(
+            "Could not determine official "
+            "DSE trading date"
+        )
+
+    print()
+    print(
+        "Current Bangladesh Date :",
+        current_date,
+    )
+
+    print(
+        "DSE Official Trading Date:",
+        official_date,
+    )
+
+    if current_date != official_date:
+
+        print()
+        print("=" * 70)
+        print("DATE GATE: STOP")
+        print("=" * 70)
+
+        print(
+            "Current date does not match "
+            "DSE official date."
+        )
+
+        print(            "No market data will be collected."
+        )
+
+        print(
+            "No CSV will be written."
+        )
+
+        return False
+
+    trading_date = official_date
+
+    # ------------------------------------------------------------
+    # SME source
+    # ------------------------------------------------------------
+
+    sme_df = scrape_sme_data(
+        trading_date
+    )
+
+    if sme_df is None:
+        raise RuntimeError(
+            "SME collection failed"
+        )
+
+    # ------------------------------------------------------------
+    # DSE stocks from Day End Archive
+    # ------------------------------------------------------------
+
+    dse_df = scrape_dse_day_end_archive(
+        trading_date,
+        sme_tickers=sme_df["Ticker"].tolist(),
+    )
+
+    if dse_df is None:
+        raise RuntimeError(
+            "DSE Day End Archive "
+            "collection failed"
+        )
+
+    # ------------------------------------------------------------
+    # Combine DSE + SME
+    # ------------------------------------------------------------
+
+    stocks = combine_dse_sme(
+        dse_df,
+        sme_df,
+    )
+
+    if stocks is None:
+        raise RuntimeError(
+            "DSE + SME combination failed"
+        )
+
+    # ------------------------------------------------------------
+    # LankaBangla DSEX / DSES / DS30
+    # ------------------------------------------------------------
+
+    index_df = get_lankabangla_indices(
+        trading_date
+    )
+
+    if index_df is None:
+        raise RuntimeError(
+            "LankaBangla index collection failed"
+        )
+
+    # ------------------------------------------------------------
+    # Final validation
+    # ------------------------------------------------------------
+
+    print()
+    print("=" * 70)
+    print("FINAL DATASET VALIDATION")
+    print("=" * 70)
+
+    final_df = build_final_dataset(
+        stocks,
+        index_df,
+        trading_date,
+    )
+
+    print(
+        "FINAL VALIDATION: PASSED"
+    )
+
+    print(
+        "Stock Rows:",
+        len(stocks),
+    )
+
+    print(
+        "Index Rows:",
+        len(index_df),
+    )
+
+    print(
+        "Final Rows:",
+        len(final_df),
+    )
+
+    # ------------------------------------------------------------
+    # Publish only after all validation passes.
+    # ------------------------------------------------------------
+
+    daily_file = publish_daily_csv(
+        final_df,
+        trading_date,
+    )
+
+    print()
+    print("=" * 70)
+    print(
+        "DSE + SME + DSEX/DSES/DS30 COMPLETE"
+    )
+    print("=" * 70)
+
+    print(
+        "Official Trading Date:",
+        trading_date,
+    )
+
+    print(
+        "Daily CSV:",
+        daily_file,
+    )
+
+    print("DONE")
+
+    return True
+
+
+# ================================================================
+# WAIT / RETRY CONTROL
+# ================================================================
+
+def seconds_until(time_value):
+    current = now_bd()
+
+    target = current.replace(
+        hour=time_value.hour,
+        minute=time_value.minute,
+        second=0,
+        microsecond=0,
+    )
+
+    if target <= current:
+        return 0
+
+    return (
+        target - current
+    ).total_seconds()
+
+
+def run_normal():
+    # Date is checked immediately.
+
+    current_date = today_bd()
+
+    official_date = (
+        get_dse_official_date()
+    )
+
+    if official_date is None:
+
+        print(
+            "Unable to determine "
+            "DSE date. STOP."
+        )
+
+        return 1
+
+    print()
+    print(
+        "Current Bangladesh Date :",
+        current_date,
+    )
+
+    print(
+        "DSE Official Trading Date:",
+        official_date,
+    )
+
+    # This is the ONLY trading-day gate.
+
+    if current_date != official_date:
+
+        print()
+        print("=" * 70)
+        print("DATE GATE: STOP")
+        print("=" * 70)
+
+        print(
+            "DSE official date does not "
+            "match today's date."
+        )
+
+        print(
+            "No collection."
+        )
+
+        return 0
+
+    # If launched before 2:40 PM,
+    # wait until 2:40 PM.
+
+    wait_seconds = seconds_until(
+        FEED_TIME
+    )
+
+    if wait_seconds > 0:
+
+        print()
+        print("=" * 70)
+        print(
+            "DATE MATCHED - "
+            "WAITING FOR 2:40 PM"
+        )
+        print("=" * 70)
+
+        print(
+            "Bangladesh Time:",
+            now_bd().strftime(
+                "%I:%M:%S %p"
+            ),
+        )
+
+        print(
+            "Scheduled feed : 02:40 PM"
+        )
+
+        time.sleep(
+            wait_seconds
+        )
+
+    # ------------------------------------------------------------
+    # Attempt 1: 2:40 PM
+    # Attempt 2: 2:45 PM if needed
+    # ------------------------------------------------------------
+
+    for attempt in range(
+        1,
+        MAX_ATTEMPTS + 1,
+    ):
+
+        print()
+        print(
+            f"========== EOD ATTEMPT "
+            f"{attempt}/{MAX_ATTEMPTS} =========="
+        )
+
+        try:
+
+            # Re-check date immediately
+            # before collection.
+
+            current_date = today_bd()
+
+            official_date = (
+                get_dse_official_date()
+            )
+
+            if official_date is None:
+                raise RuntimeError(
+                    "Could not determine "
+                    "DSE official date"
+                )
+
+            if (
+                current_date
+                != official_date
+            ):
+
+                print(
+                    "DATE GATE CHANGED: STOP"
+                )
+
+                return 0
+
+            if collect_and_publish():
+                return 0
+
+        except Exception as exc:
+
+            logging.exception(
+                "EOD attempt %d failed",
+                attempt,
+            )
+
+            print()
+            print(
+                "ATTEMPT FAILED:",
+                exc,
+            )
+
+        if attempt == 1:
+
+            wait_seconds = seconds_until(
+                RETRY_TIME
+            )
+
+            print()
+            print("=" * 70)
+            print("FIRST ATTEMPT FAILED")
+            print("=" * 70)
+
+            if wait_seconds > 0:
+
+                print(
+                    "Retrying at 02:45 PM..."
+                )
+
+                time.sleep(
+                    wait_seconds
+                )
+
+            else:
+
+                print(
+                    "2:45 PM has passed; "
+                    "performing the single "
+                    "retry now."
+                )
+
+    print()
+    print("=" * 70)
+    print("CLOUD FEEDER FAILED")
+    print("=" * 70)
+
+    print(
+        "No new daily CSV was published."
+    )
+
+    return 1
+
+
+# ================================================================
+# MAIN
+# ================================================================
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=(
+            "DSE + SME + DSEX/DSES/DS30 "
+            "daily EOD cloud feeder"
+        )
+    )
+
+    parser.add_argument(
+        "--check-date",
+        action="store_true",
+        help=(
+            "Check current Bangladesh date "
+            "against DSE official date only."
+        ),
+    )
+
+    args = parser.parse_args()
+
+    if args.check_date:
+        return date_gate_only()
+
+    return run_normal()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
