@@ -64,10 +64,13 @@ jobs:
           echo "GENERATED DSE DATA"
           echo "========================================"
 
-          find data -type f -name "*.csv" -print | sort
+          find . -maxdepth 3 -type f -name "DSE_EOD_*.csv" \
+            -not -path "./DSEX/*" \
+            -print | sort
 
-          if ! find data -type f -name "*.csv" | grep -q .; then
-            echo "ERROR: No CSV files were generated."
+          if ! find . -maxdepth 3 -type f -name "DSE_EOD_*.csv" \
+            -not -path "./DSEX/*" | grep -q .; then
+            echo "ERROR: No newly generated DSE EOD CSV was found."
             exit 1
           fi
 
@@ -104,7 +107,10 @@ jobs:
 
           echo "Copying new DSE data..."
 
-          cp -R data/. public/DSEX/
+          find . -maxdepth 1 -type d -regex "./20[0-9][0-9]" -print0 |
+            while IFS= read -r -d "" year_dir; do
+              cp -R "$year_dir" public/DSEX/
+            done
 
           # --------------------------------------------------------
           # Show complete public archive
@@ -315,7 +321,10 @@ jobs:
           echo "UPDATING PRIVATE DSE ARCHIVE"
           echo "========================================"
 
-          cp -R data/. DSEX/
+          find . -maxdepth 1 -type d -regex "./20[0-9][0-9]" -print0 |
+            while IFS= read -r -d "" year_dir; do
+              cp -R "$year_dir" DSEX/
+            done
 
           git config user.name "DSE Daily Feeder"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
