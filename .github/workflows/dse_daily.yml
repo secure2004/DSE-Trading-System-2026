@@ -364,7 +364,7 @@ jobs:
 
           for year in available_years:
               year_months = grouped[year]
-              year_file_count = sum(len(files) for files in year_months.values())
+              year_files_total = sum(len(files) for files in year_months.values())
               first_month = min(year_months.keys())
               last_month = max(year_months.keys())
 
@@ -459,13 +459,13 @@ jobs:
                                   <span class="archive-calendar">▣</span>
                                   <div>
                                       <h2>{escape(year)}</h2>
-                                      <p>{year_file_count} trading days&nbsp;&nbsp;|&nbsp;&nbsp;{escape(month_range)}</p>
+                                      <p>{year_files_total} trading days&nbsp;&nbsp;|&nbsp;&nbsp;{escape(month_range)}</p>
                                   </div>
                               </div>
                           </div>
                           <a class="full-year-btn" href="{escape(year_zip)}">
                               ↓&nbsp; Download {escape(year)} (Full Year ZIP)
-                              <small>All {year_file_count} daily files</small>
+                              <small>All {year_files_total} daily files</small>
                           </a>
                       </div>
                       {''.join(month_sections)}
