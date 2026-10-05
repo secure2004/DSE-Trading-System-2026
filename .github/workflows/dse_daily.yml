@@ -90,6 +90,8 @@ jobs:
 
           rm -rf public
           mkdir -p public/DSEX
+          mkdir -p public/downloads
+
 
           # --------------------------------------------------------
           # Copy existing archived DSEX files from private repo
@@ -102,6 +104,7 @@ jobs:
             echo "No existing DSEX archive found."
           fi
 
+
           # --------------------------------------------------------
           # Copy today's newly generated data
           # --------------------------------------------------------
@@ -113,6 +116,7 @@ jobs:
               cp -R "$year_dir" public/DSEX/
             done
 
+
           # --------------------------------------------------------
           # Show complete public archive
           # --------------------------------------------------------
@@ -123,7 +127,126 @@ jobs:
 
 
       # ============================================================
-      # 7. GENERATE AUTOMATIC HOMEPAGE
+      # 7. GENERATE MONTHLY AND YEARLY ZIP ARCHIVES
+      # ============================================================
+
+      - name: Generate ZIP archives
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "GENERATING MONTHLY AND YEARLY ZIP FILES"
+          echo "========================================"
+
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile, ZIP_DEFLATED
+          from collections import defaultdict
+
+          root = Path("public/DSEX")
+          downloads = Path("public/downloads")
+
+          downloads.mkdir(parents=True, exist_ok=True)
+
+          csv_files = sorted(
+              root.rglob("DSE_EOD_*.csv")
+          )
+
+          if not csv_files:
+              raise SystemExit("ERROR: No CSV files found.")
+
+          print(f"Found {len(csv_files)} CSV files.")
+
+          monthly = defaultdict(list)
+          yearly = defaultdict(list)
+
+          for file in csv_files:
+              relative = file.relative_to(root)
+
+              parts = relative.parts
+
+              if len(parts) < 3:
+                  print(f"Skipping unexpected path: {file}")
+                  continue
+
+              year = parts[0]
+              month = parts[1]
+
+              monthly[(year, month)].append(file)
+              yearly[year].append(file)
+
+
+          # --------------------------------------------------------
+          # MONTHLY ZIP FILES
+          # --------------------------------------------------------
+
+          for (year, month), files in sorted(monthly.items()):
+
+              output_dir = downloads / year / month
+              output_dir.mkdir(parents=True, exist_ok=True)
+
+              zip_path = output_dir / f"DSE_EOD_{year}-{month}.zip"
+
+              with ZipFile(
+                  zip_path,
+                  "w",
+                  compression=ZIP_DEFLATED
+              ) as zf:
+
+                  for file in sorted(files):
+                      zf.write(
+                          file,
+                          arcname=file.name
+                      )
+
+              print(
+                  f"MONTH ZIP: {zip_path} "
+                  f"({len(files)} CSV files)"
+              )
+
+
+          # --------------------------------------------------------
+          # YEARLY ZIP FILES
+          # --------------------------------------------------------
+
+          for year, files in sorted(yearly.items()):
+
+              output_dir = downloads / year
+              output_dir.mkdir(parents=True, exist_ok=True)
+
+              zip_path = output_dir / f"DSE_EOD_{year}.zip"
+
+              with ZipFile(
+                  zip_path,
+                  "w",
+                  compression=ZIP_DEFLATED
+              ) as zf:
+
+                  for file in sorted(files):
+                      relative = file.relative_to(root)
+
+                      zf.write(
+                          file,
+                          arcname=str(relative)
+                      )
+
+              print(
+                  f"YEAR ZIP: {zip_path} "
+                  f"({len(files)} CSV files)"
+              )
+
+
+          print("")
+          print("Generated ZIP files:")
+
+          for zip_file in sorted(downloads.rglob("*.zip")):
+              print(zip_file)
+
+          PY
+
+
+      # ============================================================
+      # 8. GENERATE AUTOMATIC YEAR → MONTH → DAY HOMEPAGE
       # ============================================================
 
       - name: Generate public homepage
@@ -137,118 +260,638 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           from html import escape
+          from collections import defaultdict
+          import re
 
           root = Path("public")
           dsex = root / "DSEX"
+          downloads = root / "downloads"
 
           csv_files = sorted(
               dsex.rglob("DSE_EOD_*.csv"),
               reverse=True
           )
 
-          rows = []
+          grouped = defaultdict(
+              lambda: defaultdict(list)
+          )
+
+          pattern = re.compile(
+              r"DSE_EOD_(\d{4})-(\d{2})-(\d{2})\.csv$"
+          )
 
           for file in csv_files:
-              relative = file.relative_to(root).as_posix()
-              filename = file.name
 
-              rows.append(
-                  f'''
-                  <a class="file"
-                     href="/{escape(relative)}">
-                      {escape(filename)}
-                  </a>
-                  '''
+              match = pattern.match(file.name)
+
+              if not match:
+                  continue
+
+              year, month, day = match.groups()
+
+              grouped[year][month].append(
+                  {
+                      "day": day,
+                      "file": file,
+                  }
               )
 
-          if rows:
-              files_html = "\n".join(rows)
-          else:
-              files_html = """
-              <p>No DSE data files are currently available.</p>
+
+          month_names = {
+              "01": "January",
+              "02": "February",
+              "03": "March",
+              "04": "April",
+              "05": "May",
+              "06": "June",
+              "07": "July",
+              "08": "August",
+              "09": "September",
+              "10": "October",
+              "11": "November",
+              "12": "December",
+          }
+
+
+          # --------------------------------------------------------
+          # BUILD YEAR / MONTH / DAY HTML
+          # --------------------------------------------------------
+
+          sections = []
+
+          for year in sorted(grouped.keys(), reverse=True):
+
+              year_months = grouped[year]
+
+              year_file_count = sum(
+                  len(files)
+                  for files in year_months.values()
+              )
+
+              year_zip = (
+                  f"/downloads/{year}/"
+                  f"DSE_EOD_{year}.zip"
+              )
+
+              year_html = f"""
+              <section class="year-section"
+                       data-year="{escape(year)}">
+
+                  <div class="year-header">
+
+                      <div>
+                          <h2>{escape(year)}</h2>
+                          <div class="year-count">
+                              {year_file_count} daily files
+                          </div>
+                      </div>
+
+                      <a class="year-download"
+                         href="{escape(year_zip)}">
+                          📦 Download Full Year
+                      </a>
+
+                  </div>
               """
+
+              for month in sorted(
+                  year_months.keys(),
+                  reverse=True
+              ):
+
+                  files = sorted(
+                      year_months[month],
+                      key=lambda x: x["day"],
+                      reverse=True
+                  )
+
+                  month_name = month_names.get(
+                      month,
+                      month
+                  )
+
+                  month_zip = (
+                      f"/downloads/{year}/{month}/"
+                      f"DSE_EOD_{year}-{month}.zip"
+                  )
+
+                  month_html = f"""
+                  <div class="month-section"
+                       data-year="{escape(year)}"
+                       data-month="{escape(month)}">
+
+                      <div class="month-header">
+
+                          <div>
+                              <h3>
+                                  {escape(month_name)}
+                                  {escape(year)}
+                              </h3>
+
+                              <div class="month-count">
+                                  {len(files)} daily files
+                              </div>
+                          </div>
+
+                          <a class="month-download"
+                             href="{escape(month_zip)}">
+                              📦 Download Full Month
+                          </a>
+
+                      </div>
+
+                      <div class="day-list">
+                  """
+
+                  for item in files:
+
+                      day = item["day"]
+                      file = item["file"]
+
+                      relative = (
+                          file.relative_to(root)
+                          .as_posix()
+                      )
+
+                      filename = file.name
+
+                      month_html += f"""
+                          <div class="day-row"
+                               data-search="{escape(
+                                   filename.lower()
+                               )}">
+
+                              <div class="day-info">
+
+                                  <span class="day-date">
+                                      {escape(day)}
+                                  </span>
+
+                                  <span class="day-filename">
+                                      {escape(filename)}
+                                  </span>
+
+                              </div>
+
+                              <a class="csv-download"
+                                 href="/{escape(relative)}"
+                                 download>
+                                  ⬇ CSV
+                              </a>
+
+                          </div>
+                      """
+
+                  month_html += """
+                      </div>
+                  </div>
+                  """
+
+                  year_html += month_html
+
+              year_html += """
+              </section>
+              """
+
+              sections.append(year_html)
+
+
+          if sections:
+              archive_html = "\n".join(sections)
+          else:
+              archive_html = """
+              <div class="empty">
+                  No DSE data files are currently available.
+              </div>
+              """
+
+
+          total_files = len(csv_files)
+
+          # --------------------------------------------------------
+          # COMPLETE HOMEPAGE
+          # --------------------------------------------------------
 
           html = f"""<!DOCTYPE html>
           <html lang="en">
+
           <head>
+
               <meta charset="UTF-8">
+
               <meta name="viewport"
                     content="width=device-width, initial-scale=1.0">
 
-              <title>DSEX Daily Market Data</title>
+              <title>DSE Daily Market Data Archive</title>
+
+              <meta name="description"
+                    content="Bangladesh DSE daily market data archive including DSE stocks, SME securities, DSEX, DSES and DS30.">
 
               <style>
+
+                  * {{
+                      box-sizing: border-box;
+                  }}
+
                   body {{
-                      font-family: Arial, sans-serif;
-                      max-width: 900px;
-                      margin: 0 auto;
-                      padding: 40px 20px;
-                      background: #f5f7fa;
-                      color: #222;
+                      margin: 0;
+                      font-family:
+                          Arial,
+                          Helvetica,
+                          sans-serif;
+
+                      background: #f4f7fb;
+                      color: #1f2937;
                   }}
 
                   .container {{
+                      max-width: 1100px;
+                      margin: 0 auto;
+                      padding: 30px 18px 50px;
+                  }}
+
+                  .hero {{
                       background: white;
+                      border-radius: 14px;
                       padding: 30px;
-                      border-radius: 10px;
-                      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+                      box-shadow:
+                          0 3px 15px
+                          rgba(0,0,0,0.08);
+
+                      margin-bottom: 22px;
                   }}
 
                   h1 {{
-                      margin-top: 0;
+                      margin: 0 0 10px;
+                      font-size: 30px;
                   }}
 
                   .description {{
-                      color: #555;
+                      color: #5b6472;
+                      line-height: 1.6;
+                      margin: 0 0 20px;
                   }}
 
-                  .file {{
-                      display: block;
+                  .stats {{
+                      display: flex;
+                      flex-wrap: wrap;
+                      gap: 10px;
+                  }}
+
+                  .stat {{
+                      background: #eef3f8;
+                      border-radius: 8px;
+                      padding: 9px 13px;
+                      font-size: 14px;
+                  }}
+
+                  .search-box {{
+                      width: 100%;
                       padding: 14px 16px;
-                      margin: 10px 0;
-                      background: #f1f3f5;
-                      border-radius: 6px;
-                      text-decoration: none;
-                      color: #0366d6;
+                      border: 1px solid #d5dce5;
+                      border-radius: 9px;
+                      font-size: 16px;
+                      outline: none;
                   }}
 
-                  .file:hover {{
-                      background: #e9ecef;
+                  .search-box:focus {{
+                      border-color: #2563eb;
+                  }}
+
+                  .year-section {{
+                      background: white;
+                      border-radius: 14px;
+                      margin-bottom: 20px;
+                      padding: 20px;
+                      box-shadow:
+                          0 2px 10px
+                          rgba(0,0,0,0.06);
+                  }}
+
+                  .year-header,
+                  .month-header {{
+                      display: flex;
+                      justify-content: space-between;
+                      align-items: center;
+                      gap: 15px;
+                      flex-wrap: wrap;
+                  }}
+
+                  .year-header {{
+                      border-bottom:
+                          1px solid #e5e7eb;
+                      padding-bottom: 15px;
+                      margin-bottom: 15px;
+                  }}
+
+                  h2 {{
+                      margin: 0;
+                      font-size: 25px;
+                  }}
+
+                  h3 {{
+                      margin: 0;
+                      font-size: 19px;
+                  }}
+
+                  .year-count,
+                  .month-count {{
+                      color: #6b7280;
+                      font-size: 13px;
+                      margin-top: 4px;
+                  }}
+
+                  .year-download,
+                  .month-download,
+                  .csv-download {{
+                      text-decoration: none;
+                      border-radius: 7px;
+                      font-weight: 600;
+                  }}
+
+                  .year-download {{
+                      background: #1d4ed8;
+                      color: white;
+                      padding: 10px 14px;
+                  }}
+
+                  .month-download {{
+                      background: #e8f0ff;
+                      color: #174ea6;
+                      padding: 8px 12px;
+                      font-size: 14px;
+                  }}
+
+                  .month-section {{
+                      border: 1px solid #e5e7eb;
+                      border-radius: 10px;
+                      margin: 12px 0;
+                      overflow: hidden;
+                  }}
+
+                  .month-header {{
+                      background: #f8fafc;
+                      padding: 13px 15px;
+                      border-bottom:
+                          1px solid #e5e7eb;
+                  }}
+
+                  .day-list {{
+                      padding: 5px 12px;
+                  }}
+
+                  .day-row {{
+                      display: flex;
+                      justify-content: space-between;
+                      align-items: center;
+                      gap: 15px;
+                      padding: 11px 5px;
+                      border-bottom:
+                          1px solid #eef0f3;
+                  }}
+
+                  .day-row:last-child {{
+                      border-bottom: none;
+                  }}
+
+                  .day-info {{
+                      display: flex;
+                      align-items: center;
+                      gap: 13px;
+                      min-width: 0;
+                  }}
+
+                  .day-date {{
+                      min-width: 30px;
+                      font-weight: bold;
+                      font-size: 17px;
+                  }}
+
+                  .day-filename {{
+                      color: #5b6472;
+                      font-family:
+                          Consolas,
+                          monospace;
+                      font-size: 13px;
+                      overflow-wrap: anywhere;
+                  }}
+
+                  .csv-download {{
+                      background: #eef7ee;
+                      color: #216e39;
+                      padding: 7px 10px;
+                      font-size: 13px;
+                      white-space: nowrap;
+                  }}
+
+                  .empty {{
+                      background: white;
+                      padding: 30px;
+                      border-radius: 10px;
                   }}
 
                   footer {{
-                      margin-top: 30px;
+                      text-align: center;
+                      color: #6b7280;
                       font-size: 13px;
-                      color: #777;
+                      padding-top: 20px;
                   }}
+
+                  .hidden {{
+                      display: none !important;
+                  }}
+
+                  @media (max-width: 650px) {{
+
+                      h1 {{
+                          font-size: 25px;
+                      }}
+
+                      .hero {{
+                          padding: 22px;
+                      }}
+
+                      .year-section {{
+                          padding: 14px;
+                      }}
+
+                      .day-row {{
+                          align-items: flex-start;
+                      }}
+
+                      .day-info {{
+                          flex-direction: column;
+                          align-items: flex-start;
+                          gap: 3px;
+                      }}
+
+                  }}
+
               </style>
+
           </head>
+
 
           <body>
 
-          <div class="container">
+              <div class="container">
 
-              <h1>DSEX Daily Market Data</h1>
+                  <div class="hero">
 
-              <p class="description">
-                  Daily Bangladesh stock market data archive including
-                  DSE stocks, SME securities, DSEX, DSES and DS30
-                  index data.
-              </p>
+                      <h1>
+                          DSE Daily Market Data Archive
+                      </h1>
 
-              <h2>Available Data</h2>
+                      <p class="description">
+                          Bangladesh stock market daily EOD archive
+                          including DSE stocks, SME securities,
+                          DSEX, DSES and DS30 index data.
+                      </p>
 
-              {files_html}
+                      <div class="stats">
 
-              <footer>
-                  Daily DSE market data archive.
-                  <br>
-                  Total files: {len(csv_files)}
-              </footer>
+                          <div class="stat">
+                              📊 {total_files} daily CSV files
+                          </div>
 
-          </div>
+                          <div class="stat">
+                              📅 Year → Month → Day
+                          </div>
+
+                          <div class="stat">
+                              📦 Monthly & yearly ZIP downloads
+                          </div>
+
+                      </div>
+
+                      <br>
+
+                      <input
+                          id="search"
+                          class="search-box"
+                          type="search"
+                          placeholder="Search date or filename..."
+                          autocomplete="off"
+                      >
+
+                  </div>
+
+
+                  <div id="archive">
+
+                      {archive_html}
+
+                  </div>
+
+
+                  <footer>
+
+                      DSE Daily Market Data Archive
+
+                      <br>
+
+                      Daily DSE market data archive.
+
+                      <br>
+
+                      Total daily files:
+                      {total_files}
+
+                  </footer>
+
+              </div>
+
+
+              <script>
+
+                  const search =
+                      document.getElementById("search");
+
+                  search.addEventListener(
+                      "input",
+                      function() {{
+
+                          const query =
+                              this.value
+                                  .trim()
+                                  .toLowerCase();
+
+                          const years =
+                              document.querySelectorAll(
+                                  ".year-section"
+                              );
+
+                          years.forEach(
+                              function(year) {{
+
+                                  let yearVisible = false;
+
+                                  const months =
+                                      year.querySelectorAll(
+                                          ".month-section"
+                                      );
+
+                                  months.forEach(
+                                      function(month) {{
+
+                                          let monthVisible =
+                                              false;
+
+                                          const rows =
+                                              month.querySelectorAll(
+                                                  ".day-row"
+                                              );
+
+                                          rows.forEach(
+                                              function(row) {{
+
+                                                  const text =
+                                                      row.dataset.search ||
+                                                      row.innerText.toLowerCase();
+
+                                                  const visible =
+                                                      !query ||
+                                                      text.includes(query);
+
+                                                  row.classList.toggle(
+                                                      "hidden",
+                                                      !visible
+                                                  );
+
+                                                  if (visible) {{
+                                                      monthVisible = true;
+                                                  }}
+
+                                              }}
+                                          );
+
+                                          month.classList.toggle(
+                                              "hidden",
+                                              !monthVisible
+                                          );
+
+                                          if (monthVisible) {{
+                                              yearVisible = true;
+                                          }}
+
+                                      }}
+                                  );
+
+                                  year.classList.toggle(
+                                      "hidden",
+                                      !yearVisible
+                                  );
+
+                              }}
+                          );
+
+                      }}
+                  );
+
+              </script>
 
           </body>
+
           </html>
           """
 
@@ -257,11 +900,49 @@ jobs:
               encoding="utf-8"
           )
 
-          print(f"Homepage generated with {len(csv_files)} CSV files.")
+          print(
+              f"Homepage generated with "
+              f"{total_files} CSV files."
+          )
+
+          PY
 
 
       # ============================================================
-      # 8. INSTALL WRANGLER
+      # 9. SHOW PUBLIC SITE CONTENT
+      # ============================================================
+
+      - name: Verify public site
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "PUBLIC SITE CONTENT"
+          echo "========================================"
+
+          echo ""
+          echo "CSV files:"
+          find public/DSEX -type f -name "*.csv" | sort
+
+          echo ""
+          echo "ZIP files:"
+          find public/downloads -type f -name "*.zip" | sort
+
+          echo ""
+          echo "Homepage:"
+          ls -lh public/index.html
+
+          echo ""
+          echo "Total CSV files:"
+          find public/DSEX -type f -name "*.csv" | wc -l
+
+          echo ""
+          echo "Total ZIP files:"
+          find public/downloads -type f -name "*.zip" | wc -l
+
+
+      # ============================================================
+      # 10. INSTALL WRANGLER
       # ============================================================
 
       - name: Install Wrangler
@@ -270,7 +951,7 @@ jobs:
 
 
       # ============================================================
-      # 9. DEPLOY COMPLETE SITE TO CLOUDFLARE PAGES
+      # 11. DEPLOY COMPLETE SITE TO CLOUDFLARE PAGES
       # ============================================================
 
       - name: Publish complete site to Cloudflare Pages
@@ -306,12 +987,7 @@ jobs:
 
 
       # ============================================================
-      # 10. SAVE NEW CSV INTO PRIVATE REPOSITORY ARCHIVE
-      # ============================================================
-      #
-      # This keeps the historical archive available to future
-      # GitHub Actions runs. The repository remains PRIVATE.
-      #
+      # 12. SAVE NEW CSV INTO PRIVATE REPOSITORY ARCHIVE
       # ============================================================
 
       - name: Update private DSE archive
