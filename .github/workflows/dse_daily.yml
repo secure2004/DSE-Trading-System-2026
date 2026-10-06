@@ -4,8 +4,9 @@ on:
   workflow_dispatch:
 
   schedule:
-    # 08:40 UTC = 14:40 Bangladesh time
-    - cron: "40 8 * * *"
+    # 03:00 UTC = 09:00 Bangladesh time
+    # Sunday-Thursday (DSE trading days)
+    - cron: "0 3 * * 0-4"
 
 permissions:
   contents: write
