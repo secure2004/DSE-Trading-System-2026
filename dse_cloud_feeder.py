@@ -18,7 +18,7 @@
 #   -> Final validation
 #   -> YYYY/MM/DSE_EOD_YYYY-MM-DD.csv
 #
-# 2:40 failure -> retry once at 2:45 PM -> failure = STOP
+# 2:40 failure -> retry at 2:45 PM -> final retry at 2:50 PM -> failure = STOP
 #
 # NO:
 #   - intraday DSE stock source
@@ -74,8 +74,9 @@ DATE_FMT = "%Y-%m-%d"
 
 FEED_TIME = dt_time(14, 40)
 RETRY_TIME = dt_time(14, 45)
+FINAL_RETRY_TIME = dt_time(14, 50)
 
-MAX_ATTEMPTS = 2
+MAX_ATTEMPTS = 3
 
 DSE_HEADERS = {
     "User-Agent": (
@@ -2233,6 +2234,7 @@ def run_normal():
     # ------------------------------------------------------------
     # Attempt 1: 2:40 PM
     # Attempt 2: 2:45 PM if needed
+    # Attempt 3: 2:50 PM if needed
     # ------------------------------------------------------------
 
     for attempt in range(
@@ -2315,8 +2317,35 @@ def run_normal():
 
                 print(
                     "2:45 PM has passed; "
-                    "performing the single "
-                    "retry now."
+                    "performing the retry now."
+                )
+
+        elif attempt == 2:
+
+            wait_seconds = seconds_until(
+                FINAL_RETRY_TIME
+            )
+
+            print()
+            print("=" * 70)
+            print("SECOND ATTEMPT FAILED")
+            print("=" * 70)
+
+            if wait_seconds > 0:
+
+                print(
+                    "Final retrying at 02:50 PM..."
+                )
+
+                time.sleep(
+                    wait_seconds
+                )
+
+            else:
+
+                print(
+                    "2:50 PM has passed; "
+                    "performing the final retry now."
                 )
 
     print()
