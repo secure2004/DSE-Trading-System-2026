@@ -1,5 +1,5 @@
 # ================================================================
-# DSE + SME + DSEX / DSES / DS30 DAILY EOD CLOUD DATA FEEDER
+# DSE + SME + ATB + DSEX / DSES / DS30 DAILY EOD CLOUD DATA FEEDER
 # ================================================================
 #
 # AGREED DESIGN
@@ -13,7 +13,8 @@
 # 2:40 PM
 #   -> DSE Day End Archive: DSE stocks OHLC + Volume
 #   -> Existing SME source: SME stocks
-#   -> Combine DSE + SME
+#   -> ATB source: ATB stocks
+#   -> Combine DSE + SME + ATB
 #   -> LankaBangla: DSEX / DSES / DS30
 #   -> Final validation
 #   -> YYYY/MM/DSE_EOD_YYYY-MM-DD.csv
@@ -36,6 +37,7 @@
 #   3. DSES
 #   4. DSE tickers - alphabetical
 #   5. SME tickers - alphabetical
+#   6. ATB tickers - alphabetical
 # ================================================================
 
 import argparse
@@ -64,6 +66,7 @@ LOG_FILE = PROJECT_DIR / "dse_data_feeder.log"
 DSE_MARKET_API_URL = "https://www.dsebd.org/api/live/market"
 DSE_ARCHIVE_API_URL = "https://dse.com.bd/api/live/data-archive/day-end"
 SME_HTML_URL = "https://sme.dsebd.org/sme_latest_share_price_scroll_by_ltp.php"
+ATB_HTML_URL = "https://atb.dsebd.org/latest_share_price_scroll_l.php"
 
 LANKABANGLA_PRICEFILE_URL = (
     "https://www.lankabd.com/Home/PriceFile?dateinp={}"
@@ -96,6 +99,11 @@ DSE_HEADERS = {
 SME_HEADERS = {
     **DSE_HEADERS,
     "Referer": "https://sme.dsebd.org/",
+}
+
+ATB_HEADERS = {
+    **DSE_HEADERS,
+    "Referer": "https://atb.dsebd.org/",
 }
 
 EXPECTED_COLUMNS = [
@@ -895,27 +903,321 @@ def scrape_sme_data(trading_date):
 
 
 # ================================================================
-# 3. COMBINE DSE + SME
+# 3. ATB DSE DATA
 # ================================================================
 
-def combine_dse_sme(
+def scrape_atb_data(trading_date):
+    print()
+    print("=" * 70)
+    print("3. ATB DSE DATA")
+    print("=" * 70)
+
+    try:
+        response = requests.get(
+            ATB_HTML_URL,
+            headers=ATB_HEADERS,
+            timeout=30,
+            verify=False,
+        )
+
+        response.raise_for_status()
+
+        print("ATB URL:", ATB_HTML_URL)
+        print("HTTP Status:", response.status_code)
+        print("Response Size:", len(response.content), "bytes")
+
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser",
+        )
+
+        tables = soup.find_all("table")
+
+        print("ATB Tables Found:", len(tables))
+
+        target = None
+
+        # Find the ATB table by its actual column names rather than
+        # relying on a fixed table number.
+        for table in tables:
+            headers = [
+                norm(x.get_text(" ", strip=True))
+                for x in table.find_all("th")
+            ]
+
+            header_set = set(headers)
+
+            if (
+                "TRADING CODE" in header_set
+                and "LTP*" in header_set
+                and "HIGH" in header_set
+                and "LOW" in header_set
+                and "CLOSEP*" in header_set
+                and "YCP*" in header_set
+                and "VOLUME" in header_set
+            ):
+                target = table
+                break
+
+        if target is None:
+            raise RuntimeError(
+                "ATB table with expected columns was not found"
+            )
+
+        rows = target.find_all("tr")
+
+        if len(rows) < 2:
+            raise RuntimeError(
+                "ATB data rows not found"
+            )
+
+        headers = [
+            x.get_text(
+                " ",
+                strip=True,
+            ).upper()
+            for x in rows[0].find_all(
+                ["th", "td"]
+            )
+        ]
+
+        records = []
+
+        for row in rows[1:]:
+            values = [
+                x.get_text(
+                    " ",
+                    strip=True,
+                )
+                for x in row.find_all("td")
+            ]
+
+            if len(values) == len(headers):
+                records.append(values)
+
+        if not records:
+            raise RuntimeError(
+                "ATB rows could not be parsed"
+            )
+
+        df = pd.DataFrame(
+            records,
+            columns=headers,
+        )
+
+        ticker_col = find_column(
+            df.columns,
+            [
+                "TRADING CODE",
+                "TRADINGCODE",
+            ],
+        )
+
+        ltp_col = find_column(
+            df.columns,
+            [
+                "LTP*",
+                "LTP",
+            ],
+        )
+
+        high_col = find_column(
+            df.columns,
+            ["HIGH"],
+        )
+
+        low_col = find_column(
+            df.columns,
+            ["LOW"],
+        )
+
+        close_col = find_column(
+            df.columns,
+            [
+                "CLOSEP*",
+                "CLOSEP",
+                "CLOSE",
+            ],
+        )
+
+        ycp_col = find_column(
+            df.columns,
+            [
+                "YCP*",
+                "YCP",
+            ],
+        )
+
+        volume_col = find_column(
+            df.columns,
+            ["VOLUME"],
+        )
+
+        print()
+        print("ATB DETECTED COLUMNS:")
+        print("Ticker :", ticker_col)
+        print("LTP    :", ltp_col)
+        print("YCP    :", ycp_col)
+        print("High   :", high_col)
+        print("Low    :", low_col)
+        print("Close  :", close_col)
+        print("Volume :", volume_col)
+
+        if ticker_col is None:
+            raise RuntimeError(
+                "ATB ticker column missing"
+            )
+
+        if (
+            ycp_col is None
+            or high_col is None
+            or low_col is None
+            or close_col is None
+            or volume_col is None
+        ):
+            raise RuntimeError(
+                "ATB required OHLC/Volume columns missing"
+            )
+
+        result = pd.DataFrame()
+
+        result["Ticker"] = (
+            df[ticker_col]
+            .astype(str)
+            .str.strip()
+            .str.upper()
+        )
+
+        result["Date"] = trading_date
+
+        # OPTION A:
+        # ATB does not publish a separate today's OPEN column.
+        # Use YCP* (previous close) in the unified Open field
+        # so the archive keeps the existing 7-column structure.
+        result["Open"] = (
+            df[ycp_col]
+            .apply(safe_float)
+        )
+
+        result["High"] = (
+            df[high_col]
+            .apply(safe_float)
+        )
+
+        result["Low"] = (
+            df[low_col]
+            .apply(safe_float)
+        )
+
+        result["Close"] = (
+            df[close_col]
+            .apply(safe_float)
+        )
+
+        result["Volume"] = (
+            df[volume_col]
+            .apply(safe_int)
+        )
+
+        result = result[
+            result["Ticker"].apply(
+                valid_ticker
+            )
+        ].copy()
+
+        # Keep zero-volume and zero-price rows, consistent with
+        # the existing DSE/SME design.
+        result.drop_duplicates(
+            subset=["Ticker"],
+            keep="first",
+            inplace=True,
+        )
+
+        result.sort_values(
+            "Ticker",
+            inplace=True,
+        )
+
+        result.reset_index(
+            drop=True,
+            inplace=True,
+        )
+
+        if result.empty:
+            raise RuntimeError(
+                "ATB returned zero valid symbols"
+            )
+
+        print()
+        print(
+            "ATB Close Source:",
+            close_col,
+        )
+
+        print(
+            "ATB Open Source:",
+            ycp_col,
+            "(Option A)",
+        )
+
+        print(
+            "ATB Symbols:",
+            len(result),
+        )
+
+        print(
+            "ATB Trading Date:",
+            trading_date,
+        )
+
+        print()
+        print("ATB FIRST 5:")
+        print(
+            result.head(5).to_string(
+                index=False
+            )
+        )
+
+        return result[EXPECTED_COLUMNS]
+
+    except Exception as exc:
+        logging.exception(
+            "ATB collection failed"
+        )
+
+        print(
+            "ATB ERROR:",
+            exc,
+        )
+
+        return None
+
+
+# ================================================================
+# 4. COMBINE DSE + SME + ATB
+# ================================================================
+
+def combine_dse_sme_atb(
     dse_df,
     sme_df,
+    atb_df,
 ):
     print()
     print("=" * 70)
-    print("3. COMBINING DSE + SME")
+    print("4. COMBINING DSE + SME + ATB")
     print("=" * 70)
 
     if (
         dse_df is None
         or sme_df is None
+        or atb_df is None
     ):
         return None
 
     # Keep DSE and SME groups separate.
     dse = dse_df.copy()
     sme = sme_df.copy()
+    atb = atb_df.copy()
 
     # Normalize ticker names.
     dse["Ticker"] = (
@@ -932,11 +1234,16 @@ def combine_dse_sme(
         .str.upper()
     )
 
-    # SME remains authoritative if a ticker
-    # appears in both sources.
-    sme_tickers = set(
-        sme["Ticker"]
+    atb["Ticker"] = (
+        atb["Ticker"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
     )
+
+    # SME remains authoritative if a ticker
+    # appears in both DSE and SME.
+    sme_tickers = set(sme["Ticker"])
 
     dse_before = len(dse)
 
@@ -946,9 +1253,24 @@ def combine_dse_sme(
         )
     ].copy()
 
-    removed_overlap = (
+    removed_dse_sme_overlap = (
         dse_before - len(dse)
     )
+
+    # ATB is appended as its own source group.
+    # Do not silently overwrite a DSE/SME ticker.
+    dse_sme_tickers = set(dse["Ticker"]) | set(sme["Ticker"])
+
+    atb_overlap = (
+        dse_sme_tickers
+        & set(atb["Ticker"])
+    )
+
+    if atb_overlap:
+        raise RuntimeError(
+            "ATB ticker collision with DSE/SME: "
+            + ", ".join(sorted(atb_overlap))
+        )
 
     # Remove duplicate tickers within
     # each source.
@@ -959,6 +1281,12 @@ def combine_dse_sme(
     )
 
     sme.drop_duplicates(
+        subset=["Ticker"],
+        keep="first",
+        inplace=True,
+    )
+
+    atb.drop_duplicates(
         subset=["Ticker"],
         keep="first",
         inplace=True,
@@ -987,9 +1315,9 @@ def combine_dse_sme(
         inplace=True,
     )
 
-    # DSE FIRST, SME SECOND.
+    # DSE FIRST, SME SECOND, ATB THIRD.
     combined = pd.concat(
-        [dse, sme],
+        [dse, sme, atb],
         ignore_index=True,
     )
 
@@ -998,13 +1326,24 @@ def combine_dse_sme(
         len(dse),
     )
 
-    print(        "SME Symbols       :",
+    print(
+        "SME Symbols       :",
         len(sme),
     )
 
     print(
-        "Duplicates Removed:",
-        removed_overlap,
+        "ATB Symbols       :",
+        len(atb),
+    )
+
+    print(
+        "DSE/SME Duplicates Removed:",
+        removed_dse_sme_overlap,
+    )
+
+    print(
+        "ATB Collisions     :",
+        len(atb_overlap),
     )
 
     print(
@@ -1047,11 +1386,27 @@ def combine_dse_sme(
         .tolist()
     )
 
+    print()
+    print("ATB FIRST TICKERS:")
+    print(
+        atb["Ticker"]
+        .head(5)
+        .tolist()
+    )
+
+    print()
+    print("ATB LAST TICKERS:")
+    print(
+        atb["Ticker"]
+        .tail(5)
+        .tolist()
+    )
+
     return combined[EXPECTED_COLUMNS]
 
 
 # ================================================================
-# 4. LANKABANGLA DSEX / DSES / DS30 INDEX DATA
+# 5. LANKABANGLA DSEX / DSES / DS30 INDEX DATA
 # ================================================================
 
 def get_lankabangla_indices(
@@ -1517,7 +1872,7 @@ def build_final_dataset(
 ):
     if stocks is None or stocks.empty:
         raise RuntimeError(
-            "No DSE/SME stock data"
+            "No DSE/SME/ATB stock data"
         )
 
     if index_df is None or index_df.empty:
@@ -1709,7 +2064,7 @@ def build_final_dataset(
     # ------------------------------------------------------------
     # STOCK ORDER
     #
-    # combine_dse_sme() already creates:
+    # combine_dse_sme_atb() already creates:
     #
     # DSE alphabetical
     # SME alphabetical
@@ -1834,7 +2189,7 @@ def build_final_dataset(
     # Therefore the transition from the last DSE ticker to the
     # first SME ticker is not expected to be globally alphabetical.
     #
-    # combine_dse_sme() already sorts each group independently.
+    # combine_dse_sme_atb() already sorts each group independently.
     # ------------------------------------------------------------
 
     print()
@@ -1844,6 +2199,7 @@ def build_final_dataset(
     print("3. DSES")
     print("4. DSE tickers - alphabetical")
     print("5. SME tickers - alphabetical")
+    print("6. ATB tickers - alphabetical")
 
     print()
     print("FIRST 10 FINAL ROWS:")
@@ -2029,6 +2385,19 @@ def collect_and_publish():
         trading_date,
         sme_tickers=sme_df["Ticker"].tolist(),
     )
+    # ------------------------------------------------------------
+    # ATB source
+    # ------------------------------------------------------------
+
+    atb_df = scrape_atb_data(
+        trading_date
+    )
+
+    if atb_df is None:
+        raise RuntimeError(
+            "ATB collection failed"
+        )
+
 
     if dse_df is None:
         raise RuntimeError(
@@ -2037,17 +2406,18 @@ def collect_and_publish():
         )
 
     # ------------------------------------------------------------
-    # Combine DSE + SME
+    # Combine DSE + SME + ATB
     # ------------------------------------------------------------
 
-    stocks = combine_dse_sme(
+    stocks = combine_dse_sme_atb(
         dse_df,
         sme_df,
+        atb_df,
     )
 
     if stocks is None:
         raise RuntimeError(
-            "DSE + SME combination failed"
+            "DSE + SME + ATB combination failed"
         )
 
     # ------------------------------------------------------------
@@ -2109,7 +2479,7 @@ def collect_and_publish():
     print()
     print("=" * 70)
     print(
-        "DSE + SME + DSEX/DSES/DS30 COMPLETE"
+        "DSE + SME + ATB + DSEX/DSES/DS30 COMPLETE"
     )
     print("=" * 70)
 
@@ -2367,7 +2737,7 @@ def run_normal():
 def main():
     parser = argparse.ArgumentParser(
         description=(
-            "DSE + SME + DSEX/DSES/DS30 "
+            "DSE + SME + ATB + DSEX/DSES/DS30 "
             "daily EOD cloud feeder"
         )
     )
