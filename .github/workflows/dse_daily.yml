@@ -3,8 +3,9 @@ name: DSE Daily EOD
 on:
   workflow_dispatch:
 
+
   schedule:
-    # 03:00 UTC = 09:00 Bangladesh time
+    # 03:07 UTC = 09:07 Bangladesh time
     # Sunday-Thursday (DSE trading days)
     - cron: "7 3 * * 0-4"
 
