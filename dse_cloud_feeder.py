@@ -2521,7 +2521,42 @@ def seconds_until(time_value):
 
 
 def run_normal():
-    # Date is checked immediately.
+    # ------------------------------------------------------------
+    # Wait until the collection window BEFORE checking the official
+    # DSE date. The official date may not be updated early in the
+    # morning for special Friday/Saturday trading sessions.
+    # ------------------------------------------------------------
+
+    wait_seconds = seconds_until(
+        FEED_TIME
+    )
+
+    if wait_seconds > 0:
+
+        print()
+        print("=" * 70)
+        print(
+            "WAITING FOR 2:40 PM BEFORE DATE CHECK"
+        )
+        print("=" * 70)
+
+        print(
+            "Bangladesh Time:",
+            now_bd().strftime(
+                "%I:%M:%S %p"
+            ),
+        )
+
+        print(
+            "Scheduled feed : 02:40 PM"
+        )
+
+        time.sleep(
+            wait_seconds
+        )
+
+    # Check the current date against the official DSE date only
+    # after the scheduled collection window has started.
 
     current_date = today_bd()
 
@@ -2533,7 +2568,7 @@ def run_normal():
 
         print(
             "Unable to determine "
-            "DSE date. STOP."
+            "DSE date at collection time. STOP."
         )
 
         return 1
@@ -2549,7 +2584,7 @@ def run_normal():
         official_date,
     )
 
-    # This is the ONLY trading-day gate.
+    # This is the ONLY initial trading-day gate.
 
     if current_date != official_date:
 
@@ -2568,38 +2603,6 @@ def run_normal():
         )
 
         return 0
-
-    # If launched before 2:40 PM,
-    # wait until 2:40 PM.
-
-    wait_seconds = seconds_until(
-        FEED_TIME
-    )
-
-    if wait_seconds > 0:
-
-        print()
-        print("=" * 70)
-        print(
-            "DATE MATCHED - "
-            "WAITING FOR 2:40 PM"
-        )
-        print("=" * 70)
-
-        print(
-            "Bangladesh Time:",
-            now_bd().strftime(
-                "%I:%M:%S %p"
-            ),
-        )
-
-        print(
-            "Scheduled feed : 02:40 PM"
-        )
-
-        time.sleep(
-            wait_seconds
-        )
 
     # ------------------------------------------------------------
     # Attempt 1: 2:40 PM
