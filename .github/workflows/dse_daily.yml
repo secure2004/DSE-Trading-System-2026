@@ -5,8 +5,9 @@ on:
 
   schedule:
     # 03:07 UTC = 09:07 Bangladesh time
-    # Sunday-Thursday (DSE trading days)
-    - cron: "7 3 * * 0-4"
+    # Run daily so special Friday/Saturday DSE sessions are not missed.
+    # The feeder waits until 2:40 PM Bangladesh time before checking the official date.
+    - cron: "7 3 * * *"
 
 permissions:
   contents: write
