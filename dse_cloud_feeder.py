@@ -60,7 +60,7 @@ from bs4 import BeautifulSoup
 # ================================================================
 
 PROJECT_DIR = Path(__file__).resolve().parent
-DATA_DIR = PROJECT_DIR
+DATA_DIR = PROJECT_DIR / "DSEX"
 LOG_FILE = PROJECT_DIR / "dse_data_feeder.log"
 
 DSE_MARKET_API_URL = "https://www.dsebd.org/api/live/market"
@@ -232,9 +232,15 @@ def valid_ticker(value):
 # ================================================================
 
 def get_dse_official_date():
+    """Return only the authoritative session.sessionDate from DSE API.
+
+    Do not fall back to session.date, payload.date, or tradingDate because
+    those fields may describe the API's current informational date rather
+    than the date of the actual DSE trading session.
+    """
     print()
     print("=" * 70)
-    print("0. GETTING OFFICIAL DSE TRADING DATE")
+    print("0. GETTING AUTHORITATIVE DSE SESSION DATE")
     print("=" * 70)
 
     try:
@@ -244,37 +250,35 @@ def get_dse_official_date():
             timeout=30,
             verify=False,
         )
-
         response.raise_for_status()
         payload = response.json()
 
         session = payload.get("session", {})
-        result = (
-            session.get("date")
-            or payload.get("date")
-            or payload.get("tradingDate")
-        )
+        if not isinstance(session, dict):
+            raise RuntimeError("DSE API session object is missing or invalid")
 
-        if not result:
-            raise RuntimeError(
-                "DSE market API did not return session date"
-            )
-
-        # Normalize ISO datetime/date to YYYY-MM-DD.
-        result = str(result).strip()[:10]
-
-        datetime.strptime(result, DATE_FMT)
+        informational_date = session.get("date")
+        result = session.get("sessionDate")
 
         print("DSE Date API:", DSE_MARKET_API_URL)
         print("HTTP Status:", response.status_code)
         print("DSE Date Response:", len(response.content), "bytes")
-        print("Official DSE Trading Date:", result)
+        print("Informational session.date:", informational_date)
+        print("Authoritative session.sessionDate:", result)
 
+        if not result:
+            raise RuntimeError(
+                "DSE API did not return authoritative session.sessionDate; "
+                "refusing to use informational date fields"
+            )
+
+        result = str(result).strip()[:10]
+        datetime.strptime(result, DATE_FMT)
         return result
 
     except Exception as exc:
-        logging.exception("Official DSE date failed")
-        print("DSE DATE ERROR:", exc)
+        logging.exception("Authoritative DSE session date failed")
+        print("DSE SESSION DATE ERROR:", exc)
         return None
 
 
@@ -286,38 +290,19 @@ def date_gate_only():
     print("=" * 70)
     print("DATE GATE")
     print("=" * 70)
-
-    print(
-        "Current Bangladesh Date :",
-        current_date,
-    )
-
-    print(
-        "DSE Official Trading Date:",
-        dse_date,
-    )
+    print("Current Bangladesh Date:", current_date)
+    print("DSE session.sessionDate:", dse_date)
 
     if dse_date is None:
-        print("STATUS: FAILED")
+        print("STATUS: FAILED — STOP")
         return 1
 
     if current_date != dse_date:
         print("STATUS: STOP")
-
-        print(
-            "Dates do not match. "
-            "No market data will be collected."
-        )
-
+        print("Dates do not match. No data collection or publishing is allowed.")
         return 0
 
-    print("STATUS: MATCH")
-
-    print(
-        "DSE official date matches "
-        "today's Bangladesh date."
-    )
-
+    print("STATUS: MATCH — COLLECTION MAY PROCEED AT SCHEDULED TIME")
     return 0
 
 
@@ -2353,8 +2338,7 @@ def collect_and_publish():
             "DSE official date."
         )
 
-        print(            "No market data will be collected."
-        )
+        print("No market data will be collected.")
 
         print(
             "No CSV will be written."
@@ -2522,87 +2506,40 @@ def seconds_until(time_value):
 
 def run_normal():
     # ------------------------------------------------------------
-    # Wait until the collection window BEFORE checking the official
-    # DSE date. The official date may not be updated early in the
-    # morning for special Friday/Saturday trading sessions.
+    # Gate FIRST. If session.sessionDate differs from today's Bangladesh
+    # date, stop before waiting, scraping any source, or publishing files.
     # ------------------------------------------------------------
-
-    wait_seconds = seconds_until(
-        FEED_TIME
-    )
-
-    if wait_seconds > 0:
-
-        print()
-        print("=" * 70)
-        print(
-            "WAITING FOR 2:40 PM BEFORE DATE CHECK"
-        )
-        print("=" * 70)
-
-        print(
-            "Bangladesh Time:",
-            now_bd().strftime(
-                "%I:%M:%S %p"
-            ),
-        )
-
-        print(
-            "Scheduled feed : 02:40 PM"
-        )
-
-        time.sleep(
-            wait_seconds
-        )
-
-    # Check the current date against the official DSE date only
-    # after the scheduled collection window has started.
-
     current_date = today_bd()
-
-    official_date = (
-        get_dse_official_date()
-    )
-
-    if official_date is None:
-
-        print(
-            "Unable to determine "
-            "DSE date at collection time. STOP."
-        )
-
-        return 1
+    official_date = get_dse_official_date()
 
     print()
-    print(
-        "Current Bangladesh Date :",
-        current_date,
-    )
+    print("Current Bangladesh Date :", current_date)
+    print("DSE session.sessionDate :", official_date)
 
-    print(
-        "DSE Official Trading Date:",
-        official_date,
-    )
-
-    # This is the ONLY initial trading-day gate.
+    if official_date is None:
+        print("DATE GATE: FAILED — STOP")
+        print("Unable to determine authoritative DSE session date.")
+        return 1
 
     if current_date != official_date:
-
         print()
         print("=" * 70)
         print("DATE GATE: STOP")
         print("=" * 70)
-
-        print(
-            "DSE official date does not "
-            "match today's date."
-        )
-
-        print(
-            "No collection."
-        )
-
+        print("session.sessionDate does not match today's Bangladesh date.")
+        print("No waiting, market-data collection, or CSV publishing will occur.")
         return 0
+
+    # Dates match. Wait until the scheduled feed time before collection.
+    wait_seconds = seconds_until(FEED_TIME)
+    if wait_seconds > 0:
+        print()
+        print("=" * 70)
+        print("DATE GATE PASSED — WAITING FOR 2:40 PM")
+        print("=" * 70)
+        print("Bangladesh Time:", now_bd().strftime("%I:%M:%S %p"))
+        print("Scheduled feed : 02:40 PM")
+        time.sleep(wait_seconds)
 
     # ------------------------------------------------------------
     # Attempt 1: 2:40 PM
